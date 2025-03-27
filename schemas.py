@@ -1,7 +1,7 @@
 import polars as pl
 import fastapi
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 # Pydantic models for input validation
 class ItemCoordinates(BaseModel):
@@ -87,27 +87,18 @@ class CargoPlacementSystem:
             "rearrangements": rearrangements
         }
 
-# FastAPI Application
-app = fastapi.FastAPI()
-cargo_system = CargoPlacementSystem()
+class ClassificationRequest(BaseModel):
+    items: List[Dict]  # List of items where each item is a dictionary
 
-@app.post("/api/placement")
-async def process_placement(request: PlacementRequest):
-    # Add items and containers to the system
-    cargo_system.add_items(request.items)
-    cargo_system.add_containers(request.containers)
-    
-    # Optimize placement
-    placement_result = cargo_system.optimize_placement()
-    
-    return placement_result
 
-# Optional: GET endpoint to retrieve current system state
-@app.get("/api/placement")
-async def get_current_placement():
-    return {
-        "items": cargo_system.items_df.to_dicts(),
-        "containers": cargo_system.containers_df.to_dicts()
-    }
+class CargoClassificationSystem:
+    def __init__(self):
+        # Store classified items as a Polars DataFrame
+        self.items_df = pl.DataFrame()
 
-# Run with: uvicorn main:app --reload
+    def add_classified_items(self, items: List[dict]):
+        """Add new classified items to the system."""
+        if not items:
+            return
+        new_df = pl.DataFrame(items)
+        self.items_df = self.items_df.vstack(new_df) if not self.items_df.is_empty() else new_df
