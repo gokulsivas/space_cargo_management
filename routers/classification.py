@@ -10,19 +10,18 @@ router = APIRouter(
 cargo_system = CargoPlacementSystem()  # Reuse the cargo system
 classification_system = CargoClassificationSystem()
 
-# Load zone rules dynamically (e.g., from a database or file)
-ZONE_RULES_DB = {
-    "food": "Food Storage",
-    "medical": "Medical Supplies",
-    "tools": "Tool Cabinet",
-    "electronics": "Electronics Bay",
-    "waste": "Waste Disposal",
-    "default": "General Storage"
-}
-
-def load_zone_rules():
-    """Loads the latest zone rules dynamically (DB or file)"""
-    return ZONE_RULES_DB  # TODO: Replace with a real DB fetch
+# Placeholder for dynamic zone rule loading
+def load_zone_rules() -> dict:
+    """Fetch zone classification rules dynamically (e.g., from a database)."""
+    # TODO: Replace with real DB/API call in future
+    return {
+        "food": "Food Storage",
+        "medical": "Medical Supplies",
+        "tools": "Tool Cabinet",
+        "electronics": "Electronics Bay",
+        "waste": "Waste Disposal",
+        "default": "General Storage"
+    }
 
 def classify_item(item: dict, zone_rules: dict) -> dict:
     """Classifies a single item into its correct zone dynamically."""
@@ -40,6 +39,7 @@ def classify_item(item: dict, zone_rules: dict) -> dict:
 async def assign_items_to_zones(request: ClassificationRequest):
     """
     Classifies incoming items into predefined zones based on their category.
+    Optimized for efficient classification.
     """
     if not request.items:
         raise HTTPException(status_code=400, detail="No items provided for classification.")
@@ -47,33 +47,63 @@ async def assign_items_to_zones(request: ClassificationRequest):
     # Load zone rules dynamically
     zone_rules = load_zone_rules()
 
-    # Classify all items using vectorized operations
-    classified_items = [classify_item(item, zone_rules) for item in request.items]
+    # Classify all items efficiently
+    new_items = [classify_item(item, zone_rules) for item in request.items]
 
-    # Convert to a Polars DataFrame for efficient storage
-    cargo_system.items_df = pl.DataFrame(classified_items)
+    # Convert new items to a Polars DataFrame
+    new_items_df = pl.DataFrame(new_items)
 
-    return {"success": True, "classifiedItems": classified_items}
+    # Merge into classification system, avoiding duplicates
+    if not classification_system.items_df.is_empty():
+        # Remove old entries for the same itemId before appending new ones
+        classification_system.items_df = (
+            classification_system.items_df
+            .filter(~pl.col("itemId").is_in(new_items_df["itemId"]))
+            .vstack(new_items_df)  # Append new items
+        )
+    else:
+        classification_system.items_df = new_items_df
 
-@router.get("/items")
-async def get_items_by_zone():
+    return {"success": True, "classifiedItems": new_items}
+
+@router.get("/item/{item_id}")
+async def get_item_classification(item_id: str):
     """
-    Retrieve all classified items grouped by their zones.
-    This function is optimized for handling hundreds of zones efficiently.
+    Fetches the classification details of a specific item by its ID.
     """
     items_df = classification_system.items_df
 
     if items_df.is_empty():
-        return {"message": "No items have been classified yet."}
+        raise HTTPException(status_code=404, detail="No items have been classified yet.")
 
-    # Group items by zone dynamically
-    grouped_items = (
-        items_df.groupby("zone")
-        .agg_list()
-        .to_dicts()
+    item = items_df.filter(pl.col("itemId") == item_id).to_dicts()
+
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+
+    return {"item": item[0]}  # Return first match
+
+@router.put("/update/{item_id}")
+async def update_item_classification(item_id: str, updated_zone: str):
+    """
+    Updates the classification (zone) of a specific item.
+    """
+    if classification_system.items_df.is_empty():
+        raise HTTPException(status_code=404, detail="No items have been classified yet.")
+
+    # Check if the item exists
+    if classification_system.items_df.filter(pl.col("itemId") == item_id).is_empty():
+        raise HTTPException(status_code=404, detail="Item not found.")
+
+    # Update the specific item’s zone
+    classification_system.items_df = classification_system.items_df.with_columns(
+        pl.when(pl.col("itemId") == item_id)
+        .then(pl.lit(updated_zone))
+        .otherwise(pl.col("zone"))
+        .alias("zone")
     )
 
-    return {"classified_items": grouped_items}
+    return {"success": True, "message": f"Item {item_id} updated to zone {updated_zone}"}
 
 @router.delete("/reset")
 async def reset_all_classifications():
@@ -81,6 +111,7 @@ async def reset_all_classifications():
     Clears all classified items from the system.
     This operation is efficient as it directly resets the DataFrame.
     """
-    classification_system.items_df = classification_system.items_df.clear() 
+    classification_system.items_df = pl.DataFrame(schema=["itemId", "name", "category", "zone"])  # Reset with schema
     
     return {"success": True, "message": "All classifications reset successfully."}
+
