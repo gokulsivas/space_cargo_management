@@ -1,104 +1,181 @@
 import polars as pl
-import fastapi
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 
-# Pydantic models for input validation
+class Octant:
+    """Represents a node (octant) in the Octree."""
+    def __init__(self, x, y, z, width, depth, height, level=0, max_level=3):
+        self.x, self.y, self.z = x, y, z
+        self.width, self.depth, self.height = width, depth, height
+        self.level = level
+        self.max_level = max_level
+        self.occupied = False
+        self.children = None  # If subdivided, this holds 8 sub-octants
+
+    def subdivide(self):
+        """Splits the octant into 8 smaller octants if needed."""
+        if self.level >= self.max_level:
+            return
+        half_w, half_d, half_h = self.width / 2, self.depth / 2, self.height / 2
+        self.children = [
+            Octant(self.x, self.y, self.z, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x + half_w, self.y, self.z, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x, self.y + half_d, self.z, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x + half_w, self.y + half_d, self.z, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x, self.y, self.z + half_h, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x + half_w, self.y, self.z + half_h, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x, self.y + half_d, self.z + half_h, half_w, half_d, half_h, self.level + 1),
+            Octant(self.x + half_w, self.y + half_d, self.z + half_h, half_w, half_d, half_h, self.level + 1),
+        ]
+
+    def is_fitting(self, item_row):
+        """Checks if an item can fit into this octant."""
+        return (
+            not self.occupied and 
+            item_row["width"] <= self.width and 
+            item_row["depth"] <= self.depth and 
+            item_row["height"] <= self.height
+        )
+
+    def place_item(self, item_row):
+        """Tries to place an item into the octree."""
+        if self.is_fitting(item_row):
+            self.occupied = True
+            return pl.DataFrame({
+                "start_x": [self.x], "start_y": [self.y], "start_z": [self.z],
+                "end_x": [self.x + item_row["width"]],
+                "end_y": [self.y + item_row["depth"]],
+                "end_z": [self.z + item_row["height"]]
+            })  # Returns a DataFrame with placement coordinates
+
+        if not self.children:
+            self.subdivide()
+
+        for child in self.children:
+            result = child.place_item(item_row)
+            if result is not None:
+                return result
+
+        return None  # No space found
+
+
+class Octree:
+    """Octree structure for managing storage placement."""
+    def __init__(self, container_row):
+        self.root = Octant(
+            0, 0, 0, container_row["width"], container_row["depth"], container_row["height"]
+        )
+
+    def place_item(self, item_row):
+        """Finds the best space for an item and places it."""
+        return self.root.place_item(item_row)  # Returns DataFrame if placed, None otherwise
+
+
+# ---------------- Pydantic Models ----------------
+
 class ItemCoordinates(BaseModel):
     width: float
     depth: float
     height: float
 
+
 class ItemPlacement(BaseModel):
     itemId: str
     containerId: str
-    position: dict = {
-        "startCoordinates": ItemCoordinates,
-        "endCoordinates": ItemCoordinates
-    }
+    position: dict
+
 
 class RearrangementStep(BaseModel):
     step: int
     action: str  # "move", "remove", "place"
     itemId: str
     fromContainer: str
-    fromPosition: dict = {
-        "startCoordinates": ItemCoordinates
-    }
-    toPosition: Optional[dict] = {
-        "endCoordinates": ItemCoordinates
-    }
+    fromPosition: dict
+    toPosition: Optional[dict] = None
+
 
 class PlacementRequest(BaseModel):
     items: List[dict]
     containers: List[dict]
+
 
 class PlacementResponse(BaseModel):
     success: bool
     placements: List[ItemPlacement]
     rearrangements: List[RearrangementStep]
 
+
+# ---------------- Cargo Placement System ----------------
+
 class CargoPlacementSystem:
     def __init__(self):
-        # Initialize Polars DataFrames for items and containers
         self.items_df = pl.DataFrame()
         self.containers_df = pl.DataFrame()
-    
+        self.octrees = pl.DataFrame()  # Store octree information as DataFrame
+
     def add_items(self, items: List[dict]):
-        # Convert items to Polars DataFrame
+        """Store items in a Polars DataFrame."""
         self.items_df = pl.DataFrame(items)
-    
+
     def add_containers(self, containers: List[dict]):
-        # Convert containers to Polars DataFrame
+        """Store containers in DataFrame and initialize Octrees."""
         self.containers_df = pl.DataFrame(containers)
-    
-    def optimize_placement(self) -> dict:
-        # Placeholder for placement optimization logic
-        # This would implement the 3D bin packing algorithm
-        placements = []
-        rearrangements = []
-        
-        # Basic prioritization - sort items by priority
-        sorted_items = self.items_df.sort("priority", descending=True)
-        
-        # Dummy placement logic (to be replaced with actual optimization)
-        for idx, item in enumerate(sorted_items.to_dicts()):
-            placement = {
-                "itemId": item["itemId"],
-                "containerId": self.containers_df["containerId"][0],
-                "position": {
-                    "startCoordinates": {
-                        "width": idx * item["width"],
-                        "depth": 0,
-                        "height": 0
-                    },
-                    "endCoordinates": {
-                        "width": (idx + 1) * item["width"],
-                        "depth": item["depth"],
-                        "height": item["height"]
-                    }
-                }
-            }
-            placements.append(placement)
-        
-        return {
-            "success": True,
-            "placements": placements,
-            "rearrangements": rearrangements
-        }
+        self.octrees = pl.DataFrame({
+            "containerId": self.containers_df["containerId"],
+            "octree": [Octree(row) for row in self.containers_df.iter_rows(named=True)]
+        })
 
-class ClassificationRequest(BaseModel):
-    items: List[Dict]  # List of items where each item is a dictionary
+    def optimize_placement(self):
+        """Places items using Octree for optimized space management."""
+        placements_df = pl.DataFrame()
+        rearrangements_df = pl.DataFrame()
+
+        if self.items_df.is_empty() or self.containers_df.is_empty():
+            return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
+
+        # Sort items by priority (higher priority placed first)
+        sorted_items_df = self.items_df.sort("priority", descending=True)
+
+        for item_row in sorted_items_df.iter_rows(named=True):
+            preferred_container = item_row["preferredZone"]
+            
+            # Retrieve the octree for this container
+            octree_row = self.octrees.filter(pl.col("containerId") == preferred_container)
+            
+            if octree_row.height > 0:
+                octree = octree_row["octree"][0]
+                placement_position = octree.place_item(item_row)
+                
+                if placement_position is not None:
+                    placement_record = pl.DataFrame({
+                        "itemId": [item_row["itemId"]],
+                        "containerId": [preferred_container],
+                    }).hstack(placement_position)
+
+                    placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
+
+        return pl.DataFrame({
+            "success": [True],
+            "placements": [placements_df],
+            "rearrangements": [rearrangements_df]
+        })
 
 
+# ---------------- Cargo Classification System ----------------
 class CargoClassificationSystem:
     def __init__(self):
-        # Store classified items as a Polars DataFrame
         self.items_df = pl.DataFrame()
 
     def add_classified_items(self, items: List[dict]):
-        """Add new classified items to the system."""
+        """Add classified items to the system using Polars DataFrame."""
         if not items:
             return
         new_df = pl.DataFrame(items)
         self.items_df = self.items_df.vstack(new_df) if not self.items_df.is_empty() else new_df
+
+
+
+class TimeSimulationRequest(BaseModel):
+    numOfDays: Optional[int] = None
+    toTimestamp: Optional[str] = None
+    itemsToBeUsedPerDay: List[Dict[str, str]]
