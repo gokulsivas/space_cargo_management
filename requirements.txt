@@ -2,3 +2,4 @@ polars
 fastapi
 pydantic
 typing
+python-multipart
