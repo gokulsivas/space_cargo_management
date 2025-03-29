@@ -112,54 +112,96 @@ class CargoPlacementSystem:
     def __init__(self):
         self.items_df = pl.DataFrame()
         self.containers_df = pl.DataFrame()
-        self.octrees = pl.DataFrame()  # Store octree information as DataFrame
+
+        # Modify octree storage to use `zone` instead of `containerId`
+        self.octrees = pl.DataFrame({
+            "zone": [],
+            "octree": []
+        })
 
     def add_items(self, items: List[dict]):
         """Store items in a Polars DataFrame."""
         self.items_df = pl.DataFrame(items)
 
     def add_containers(self, containers: List[dict]):
-        """Store containers in DataFrame and initialize Octrees."""
+        """Store containers and initialize Octrees using zone."""
         self.containers_df = pl.DataFrame(containers)
-        self.octrees = pl.DataFrame({
-            "containerId": self.containers_df["containerId"],
-            "octree": [Octree(row) for row in self.containers_df.iter_rows(named=True)]
-        })
+
+        print("=== Containers DataFrame ===")
+        print(self.containers_df)
+
+        # Keep existing container import code
+        self.octrees = {}  # Store octrees separately in a dictionary
+
+        # Initialize octrees using the zone instead of containerId
+        for container in self.containers_df.iter_rows(named=True):
+            zone = container["zone"]  # Use zone as the key
+            self.octrees[zone] = Octree(container)  # Create and store the octree
+
+        print("=== Initialized Octrees ===")
+        print(self.octrees)
+
 
     def optimize_placement(self):
-        """Places items using Octree for optimized space management."""
+        """Places items using Octree, now indexed by zone instead of containerId."""
         placements_df = pl.DataFrame()
         rearrangements_df = pl.DataFrame()
 
+        print("=== Stored Items DataFrame ===")
+        print(self.items_df)
+
+        print("=== Stored Containers DataFrame ===")
+        print(self.containers_df)
+
+        print("=== Stored Octrees Dictionary ===")
+        print(self.octrees)  # Now correctly a dictionary
+
         if self.items_df.is_empty() or self.containers_df.is_empty():
+            print("Error: No items or containers available.")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
-        # Sort items by priority (higher priority placed first)
         sorted_items_df = self.items_df.sort("priority", descending=True)
 
-        for item_row in sorted_items_df.iter_rows(named=True):
-            preferred_container = item_row["preferredZone"]
-            
-            # Retrieve the octree for this container
-            octree_row = self.octrees.filter(pl.col("containerId") == preferred_container)
-            
-            if octree_row.height > 0:
-                octree = octree_row["octree"][0]
-                placement_position = octree.place_item(item_row)
-                
-                if placement_position is not None:
-                    placement_record = pl.DataFrame({
-                        "itemId": [item_row["itemId"]],
-                        "containerId": [preferred_container],
-                    }).hstack(placement_position)
+        print("=== Sorted Items DataFrame ===")
+        print(sorted_items_df)
 
-                    placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
+        for item_row in sorted_items_df.iter_rows(named=True):
+            preferred_zone = item_row["preferredZone"].strip()  # Ensure no leading/trailing spaces
+
+            # Ensure stored octrees also have trimmed keys
+            self.octrees = {zone.strip(): octree for zone, octree in self.octrees.items()}  
+
+            octree = self.octrees.get(preferred_zone)  # Lookup with trimmed zone
+
+            if octree is None:
+                print(f"Warning: No octree found for zone '{preferred_zone}'")
+                continue
+
+            print(f"Trying to place item {item_row['itemId']} in zone {preferred_zone}")
+
+            placement_position = octree.place_item(item_row)
+
+            if placement_position is not None:
+                print(f"Item {item_row['itemId']} placed at {placement_position}")
+                placement_record = pl.DataFrame({
+                    "itemId": [item_row["itemId"]],
+                    "zone": [preferred_zone],  # Store zone instead of containerId
+                }).hstack(placement_position)
+
+                placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
+            else:
+                print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
+
+        print("=== Final Placements DataFrame ===")
+        print(placements_df)
 
         return pl.DataFrame({
             "success": [True],
             "placements": [placements_df],
             "rearrangements": [rearrangements_df]
         })
+
+
 
 
 # ---------------- Cargo Classification System ----------------
@@ -215,3 +257,19 @@ class ImportContainersResponse(BaseModel):
     containersImported: int
     errors: Optional[List[dict]] = []
     message: str
+
+class Coordinates(BaseModel):
+    """Represents the start and end coordinates of an item placement."""
+    start_x: float
+    start_y: float
+    start_z: float
+    end_x: float
+    end_y: float
+    end_z: float
+
+
+class CargoArrangementExport(BaseModel):
+    """Schema for exporting cargo arrangement as CSV."""
+    itemId: str
+    containerId: str
+    position: Coordinates
