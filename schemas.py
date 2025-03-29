@@ -1,6 +1,7 @@
 import polars as pl
 from pydantic import BaseModel
 from typing import List, Optional, Dict
+from datetime import date
 
 class Octant:
     """Represents a node (octant) in the Octree."""
@@ -179,3 +180,38 @@ class TimeSimulationRequest(BaseModel):
     numOfDays: Optional[int] = None
     toTimestamp: Optional[str] = None
     itemsToBeUsedPerDay: List[Dict[str, str]]
+
+
+
+# 🚀 **Define Pydantic Model for Item Validation**
+class ItemModel(BaseModel):
+    itemId: int
+    name: str
+    width: float
+    depth: float
+    height: float
+    mass: float
+    priority: int
+    expiryDate: Optional[date] = None  # Optional since expiry can be null
+    usageLimit: int
+    preferredZone: str
+
+# 🚀 **Define Pydantic Model for Container Validation**
+class ContainerModel(BaseModel):
+    containerId: int
+    zone: str
+    width: float
+    depth: float
+    height: float
+
+class ImportItemsResponse(BaseModel):
+    success: bool
+    itemsImported: int
+    errors: Optional[List[dict]] = []
+    message: str
+
+class ImportContainersResponse(BaseModel):
+    success: bool
+    containersImported: int
+    errors: Optional[List[dict]] = []
+    message: str
