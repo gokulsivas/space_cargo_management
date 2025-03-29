@@ -1,16 +1,24 @@
-from fastapi import APIRouter, Query, HTTPException
-from datetime import datetime
+import os
 import polars as pl
+from datetime import datetime, timezone
+from fastapi import APIRouter, Query, HTTPException
+import json
 
-# Router setup
 router = APIRouter(
     prefix="/api/logs",
-    tags=["logs"],
+    tags=["Logs"]
 )
 
-# In-memory log storage (use a database in production)
-log_columns = ["timestamp", "userId", "actionType", "itemId", "details"]
-logs_df = pl.DataFrame(schema={col: pl.Utf8 for col in log_columns})
+LOG_FILE = "logs.csv"
+
+# Load logs globally if CSV exists
+logs_df = pl.DataFrame(schema={
+    "timestamp": pl.Utf8,  # Initially as string; later converted to datetime
+    "userId": pl.Utf8,
+    "actionType": pl.Utf8,
+    "itemId": pl.Utf8,
+    "details": pl.Object  # Store as dictionary for structured logging
+})
 
 
 @router.get("/")
@@ -23,29 +31,35 @@ async def get_logs(
 ):
     global logs_df
 
-    # Convert string dates to datetime
-    try:
-        start_date = datetime.fromisoformat(startDate)
-        end_date = datetime.fromisoformat(endDate)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use ISO 8601 format.")
+    # Load logs if available
+    if os.path.exists(LOG_FILE):
+        logs_df = pl.read_csv(LOG_FILE)
 
-    # Convert logs_df timestamp column to datetime for filtering
+    # Convert timestamps
+    start_date = datetime.fromisoformat(startDate).replace(tzinfo=timezone.utc)
+    end_date = datetime.fromisoformat(endDate).replace(tzinfo=timezone.utc)
+
     if logs_df.height > 0:
-        logs_df = logs_df.with_columns(pl.col("timestamp").str.strptime(pl.Datetime))
+        logs_df = logs_df.with_columns(pl.col("timestamp").str.strptime(pl.Datetime).dt.convert_time_zone("UTC"))
 
         # Apply filters
         filtered_logs = logs_df.filter(
             (pl.col("timestamp") >= start_date) & (pl.col("timestamp") <= end_date)
         )
 
-        if itemId:
-            filtered_logs = filtered_logs.filter(pl.col("itemId") == itemId)
-        if userId:
-            filtered_logs = filtered_logs.filter(pl.col("userId") == userId)
-        if actionType:
-            filtered_logs = filtered_logs.filter(pl.col("actionType") == actionType)
+        # Convert logs to dict and parse JSON details
+        logs_list = filtered_logs.to_dicts()
 
-        return {"logs": filtered_logs.to_dicts()}
+        for log in logs_list:
+            try:
+                log["details"] = json.loads(log["details"])  # Convert JSON string back to dict
+            except json.JSONDecodeError:
+                log["details"] = {
+                    "fromContainer": "",
+                    "toContainer": "",
+                    "reason": log["details"]
+                }  # Handle old string-based logs
 
-    return {"logs": []}  # Return empty if no logs exist
+        return {"logs": logs_list}
+
+    return {"logs": []}
