@@ -147,23 +147,11 @@ class CargoPlacementSystem:
         placements_df = pl.DataFrame()
         rearrangements_df = pl.DataFrame()
 
-        print("=== Stored Items DataFrame ===")
-        print(self.items_df)
-
-        print("=== Stored Containers DataFrame ===")
-        print(self.containers_df)
-
-        print("=== Stored Octrees Dictionary ===")
-        print(self.octrees)  # Now correctly a dictionary
-
         if self.items_df.is_empty() or self.containers_df.is_empty():
             print("Error: No items or containers available.")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
         sorted_items_df = self.items_df.sort("priority", descending=True)
-
-        print("=== Sorted Items DataFrame ===")
-        print(sorted_items_df)
 
         for item_row in sorted_items_df.iter_rows(named=True):
             preferred_zone = item_row["preferredZone"].strip()  # Ensure no leading/trailing spaces
@@ -177,12 +165,9 @@ class CargoPlacementSystem:
                 print(f"Warning: No octree found for zone '{preferred_zone}'")
                 continue
 
-            print(f"Trying to place item {item_row['itemId']} in zone {preferred_zone}")
-
             placement_position = octree.place_item(item_row)
 
             if placement_position is not None:
-                print(f"Item {item_row['itemId']} placed at {placement_position}")
                 placement_record = pl.DataFrame({
                     "itemId": [item_row["itemId"]],
                     "zone": [preferred_zone],  # Store zone instead of containerId
@@ -191,9 +176,6 @@ class CargoPlacementSystem:
                 placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
             else:
                 print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
-
-        print("=== Final Placements DataFrame ===")
-        print(placements_df)
 
         return pl.DataFrame({
             "success": [True],
