@@ -1,10 +1,9 @@
 import csv
 import io
-import json
+import polars as pl
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, UploadFile, File, Response, Form
-from schemas import CargoPlacementSystem, ItemModel, ContainerModel, ImportItemsResponse, ImportContainersResponse
-from typing import Optional, List, Dict
+from fastapi import APIRouter, HTTPException, UploadFile, File, Response
+from schemas import CargoPlacementSystem, ImportItemsResponse, ImportContainersResponse, CargoArrangementExport, Coordinates
 
 router = APIRouter(
     prefix="/api",
@@ -171,35 +170,37 @@ async def import_containers(file: UploadFile = File(...)):
 async def export_arrangement():
     try:
         result = cargo_system.optimize_placement()
-        # Check if result is a dictionary containing placements
-        if isinstance(result, dict) and "placements" in result:
-            placements = result["placements"]
-        else:
-            placements = []
-            
-        if not placements:
+
+        print("=== Raw Optimization Result ===")
+        print(result)
+
+        # Ensure 'placements' exists and is a valid DataFrame
+        placements = None
+        if isinstance(result, pl.DataFrame) and "placements" in result.columns:
+            placements = result["placements"][0] if not result["placements"].is_null()[0] else None
+
+        print("=== Extracted Placements ===")
+        print(placements)
+
+        if placements is None or placements.is_empty():
             raise HTTPException(status_code=404, detail="No placements available.")
 
         output = io.StringIO()
         writer = csv.writer(output)
+        writer.writerow(["Item ID", "Zone", "Coordinates (W1,D1,H1),(W2,D2,H2)"])
 
-        # CSV Header
-        writer.writerow(["Item ID", "Container ID", "Coordinates (W1,D1,H1),(W2,D2,H2)"])
-
-        # CSV Rows
-        for placement in placements:
-            if isinstance(placement, dict) and "position" in placement:
-                start = placement["position"]["startCoordinates"]
-                end = placement["position"]["endCoordinates"]
-                writer.writerow([
-                    placement["itemId"],
-                    placement["containerId"],
-                    f"({start['width']},{start['depth']},{start['height']}),({end['width']},{end['depth']},{end['height']})"
-                ])
+        for placement in placements.iter_rows(named=True):
+            writer.writerow([
+                placement["itemId"],
+                placement["zone"],  # Use zone instead of containerId
+                f"({placement['start_x']},{placement['start_y']},{placement['start_z']}),"
+                f"({placement['end_x']},{placement['end_y']},{placement['end_z']})"
+            ])
 
         output.seek(0)
         return Response(output.getvalue(), media_type="text/csv", headers={
             "Content-Disposition": "attachment; filename=arrangement.csv"
         })
     except Exception as e:
+        print(f"Export Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error exporting arrangement: {str(e)}")
