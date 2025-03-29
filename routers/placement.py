@@ -19,13 +19,10 @@ async def process_placement(request: PlacementRequest) -> dict:
     cargo_system.add_items(request.items)
     cargo_system.add_containers(request.containers)
 
-    # Optimize placement using Octree
-    placement_result_df = cargo_system.optimize_placement()
+    # Optimize placement
+    placement_result = cargo_system.optimize_placement()
 
-    # Convert DataFrame results to a dictionary
-    placement_result = placement_result_df.to_dicts()[0]  # Convert first row (single record) to a dictionary
-
-    if not placement_result["placements"] or placement_result["placements"] == []:
+    if not placement_result["placements"]:
         raise HTTPException(status_code=422, detail="Could not place all items. Insufficient space or constraints.")
 
     return placement_result
