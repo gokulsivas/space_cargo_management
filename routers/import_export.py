@@ -1,9 +1,11 @@
 import csv
 import io
 import polars as pl
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response
 from schemas import CargoPlacementSystem, ImportItemsResponse, ImportContainersResponse, CargoArrangementExport, Coordinates
+import polars as pl
+import json
 
 router = APIRouter(
     prefix="/api",
@@ -11,6 +13,48 @@ router = APIRouter(
 )
 
 cargo_system = CargoPlacementSystem()
+
+LOG_FILE = "logs.csv"
+
+# DataFrame to store logs
+log_columns = ["timestamp", "userId", "actionType", "itemId", "details"]
+logs_df = pl.DataFrame(schema={
+    "timestamp": pl.Utf8,
+    "userId": pl.Utf8,
+    "actionType": pl.Utf8,
+    "itemId": pl.Utf8,
+    "details": pl.Utf8  # Store details as a string (JSON)
+})
+
+
+def log_action(actionType: str, details: dict = None, userId: str = "", itemId: str = ""):
+    global logs_df
+
+    if not isinstance(details, dict):  # Ensure details is a dictionary
+        details = {"fromContainer": "", "toContainer": "", "reason": str(details)}
+
+    structured_details = {
+        "fromContainer": details.get("fromContainer", ""),
+        "toContainer": details.get("toContainer", ""),
+        "reason": details.get("reason", "")
+    }
+
+    details_json = json.dumps(structured_details)  # Store as JSON string
+
+    new_entry = pl.DataFrame(
+        {
+            "timestamp": [datetime.now(timezone.utc).isoformat()],
+            "userId": [userId],
+            "actionType": [actionType],
+            "itemId": [itemId],
+            "details": [details_json],  # Ensure JSON format
+        }
+    )
+
+    logs_df = pl.concat([logs_df, new_entry], how="vertical")
+    logs_df.write_csv(LOG_FILE)
+
+
 
 def convert_csv_to_json(file_contents: str):
     """ Convert CSV data to a list of dictionaries (JSON format). """
@@ -96,7 +140,9 @@ async def import_items(file: UploadFile = File(...)):
     if items:
         try:
             cargo_system.add_items(items)
+            log_action("Import Items", f"Imported {len(items)} items successfully.")
         except Exception as e:
+            log_action("Import Items Failed", f"Error: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error processing items: {str(e)}")
 
     return ImportItemsResponse(
@@ -154,8 +200,11 @@ async def import_containers(file: UploadFile = File(...)):
     if containers:
         try:
             cargo_system.add_containers(containers)
+            log_action("Import Containers", f"Imported {len(containers)} containers successfully.")
         except Exception as e:
+            log_action("Import Containers Failed", f"Error: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error processing containers: {str(e)}")
+
 
     return ImportContainersResponse(
         success=len(errors) == 0,
@@ -170,6 +219,7 @@ async def import_containers(file: UploadFile = File(...)):
 async def export_arrangement():
     try:
         result = cargo_system.optimize_placement()
+        log_action("Optimize Placement", "Cargo placement optimization executed.")
 
         print("=== Raw Optimization Result ===")
         print(result)
@@ -183,6 +233,7 @@ async def export_arrangement():
         print(placements)
 
         if placements is None or placements.is_empty():
+            log_action("Export Failed", "No placements available for export.")
             raise HTTPException(status_code=404, detail="No placements available.")
 
         output = io.StringIO()
@@ -198,9 +249,12 @@ async def export_arrangement():
             ])
 
         output.seek(0)
+        log_action("Export Arrangement", "Exported cargo arrangement successfully.")
+
         return Response(output.getvalue(), media_type="text/csv", headers={
             "Content-Disposition": "attachment; filename=arrangement.csv"
         })
     except Exception as e:
+        log_action("Export Failed", f"Error exporting arrangement: {str(e)}")
         print(f"Export Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error exporting arrangement: {str(e)}")
