@@ -120,6 +120,13 @@ class PlacementResponse(BaseModel):
     placements: List[ItemPlacement]
     rearrangements: List[RearrangementStep]
 
+class Item_for_search(BaseModel):
+    itemId: int
+    name: str
+    containerId: str  # Where the item is kept
+    zone: str  # Zone of the container
+    position: Position
+
 # ---------------- Cargo Placement System ----------------
 
 # Modified CargoPlacementSystem class
@@ -283,18 +290,25 @@ class ImportContainersResponse(BaseModel):
     errors: Optional[List[dict]] = []
     message: str
 
-class Coordinates(BaseModel):
-    """Represents the start and end coordinates of an item placement."""
-    start_x: float
-    start_y: float
-    start_z: float
-    end_x: float
-    end_y: float
-    end_z: float
-
-
 class CargoArrangementExport(BaseModel):
     """Schema for exporting cargo arrangement as CSV."""
     itemId: str
     containerId: str
     position: Coordinates
+
+class RetrieveItemRequest(BaseModel):
+    itemId: int
+    userId: str
+    timestamp: str
+
+class RetrievalStep(BaseModel):
+    step: int
+    action: str
+    itemId: int
+    itemName: str
+
+class SearchResponse(BaseModel):
+    success: bool
+    found: bool
+    item: Optional[Item_for_search] = None
+    retrievalSteps: List[RetrievalStep] = []
