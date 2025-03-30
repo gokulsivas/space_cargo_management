@@ -1,5 +1,5 @@
 import polars as pl
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import date
 import traceback
@@ -297,9 +297,9 @@ class CargoArrangementExport(BaseModel):
     position: Coordinates
 
 class RetrieveItemRequest(BaseModel):
-    itemId: int
-    userId: str
-    timestamp: str
+    itemId: int = Field(..., description="Unique identifier for the item to retrieve")
+    userId: str = Field(..., description="ID of the user retrieving the item")
+    timestamp: Optional[str] = Field(None, description="Timestamp of retrieval (ISO format)")
 
 class RetrievalStep(BaseModel):
     step: int
