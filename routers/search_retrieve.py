@@ -208,14 +208,16 @@ async def retrieve_item(
         items_file = "imported_items.csv"    
         containers_file = "imported_containers.csv"
         cargo_file = "cargo_arrangement.csv"
+        waste_file = "waste_items.csv"
         
         # Check if files exist
-        if not all(os.path.exists(file) for file in [items_file, cargo_file]):
+        if not all(os.path.exists(file) for file in [items_file, cargo_file, containers_file]):
             return {"success": False}
         
         # Load CSV data
         items_df = pl.read_csv(items_file)
         cargo_df = pl.read_csv(cargo_file)
+        containers_df = pl.read_csv(containers_file)
         
         # Check if item exists in cargo arrangement
         item_in_cargo = cargo_df.filter(pl.col("itemId") == item_id)
@@ -244,7 +246,7 @@ async def retrieve_item(
         
         updated_items_df = items_df.with_columns(
             pl.when(pl.col("itemId") == item_id)
-            .then(pl.lit(new_usage))  # Use literal value instead of expression
+            .then(pl.lit(new_usage))  
             .otherwise(pl.col("usageLimit"))
             .alias("usageLimit")
         )
@@ -262,10 +264,26 @@ async def retrieve_item(
             updated_cargo_df = cargo_df.filter(pl.col("itemId") != item_id)
             updated_cargo_df.write_csv(cargo_file)
             
-            # Add to waste items (for tracking purposes)
-            add_to_waste_items(item_id, item_data.select("name")[0, 0], "Out of Uses", 
-                              item_in_cargo.select("containerId")[0, 0], 
-                              item_in_cargo.select("position")[0, 0])
+            # Get the zone of the item
+            zone = item_in_cargo.select("zone")[0, 0]
+
+            # Get the containerId from the containers data using the zone
+            container_id_df = containers_df.filter(pl.col("zone") == zone)
+            if container_id_df.is_empty():
+                print("Error: No container found for the given zone.")
+                return {"success": False}
+
+            container_id = container_id_df.select("containerId")[0, 0]
+            position_data = item_in_cargo.select("coordinates")[0, 0]
+            
+            # Add to waste items with the proper format
+            add_to_waste_items(
+                item_id=item_id, 
+                name=item_data.select("name")[0, 0], 
+                reason="Out of Uses", 
+                container_id=container_id, 
+                position=position_data
+            )
         
         return {"success": True}
         
@@ -275,19 +293,49 @@ async def retrieve_item(
         print(traceback.format_exc())
         return {"success": False}
 
+
 # Helper function to add item to waste tracking
 def add_to_waste_items(item_id, name, reason, container_id, position):
-    global waste_items
+    waste_file = "waste_items.csv"
     
-    waste_item = {
-        "itemId": item_id,
-        "name": name,
-        "reason": reason,
-        "containerId": container_id,
-        "position": position
-    }
+    # Create the waste_items.csv if it doesn't exist
+    if not os.path.exists(waste_file):
+        waste_df = pl.DataFrame({
+            "itemId": [str(item_id)],
+            "name": [name],
+            "reason": [reason],
+            "containerId": [str(container_id)],
+            "position": [str(position)]
+        })
+        waste_df.write_csv(waste_file)
     
-    waste_items.append(waste_item)
+    # Load existing waste items
+    try:
+        waste_df = pl.read_csv(waste_file)
+    except:
+        waste_df = pl.DataFrame({
+            "itemId": [],
+            "name": [],
+            "reason": [],
+            "containerId": [],
+            "position": []
+        })
+    
+    # Add new waste item
+    new_waste_item = pl.DataFrame({
+        "itemId": [str(item_id)],
+        "name": [name],
+        "reason": [reason],
+        "containerId": [str(container_id)],
+        "position": [str(position)]
+    })
+    
+    # Concatenate and save
+    updated_waste_df = pl.concat([waste_df, new_waste_item])
+    updated_waste_df.write_csv(waste_file)
+    
+    print(f"Added item {item_id} to waste items with reason: {reason}")
+
 
 # Helper function to log retrievals (optional)
 def log_retrieval(item_id, user_id, timestamp):
