@@ -71,40 +71,52 @@ class Octree:
         """Finds the best space for an item and places it."""
         return self.root.place_item(item_row)  # Returns DataFrame if placed, None otherwise
 
-
-# ---------------- Pydantic Models ----------------
-
-class ItemCoordinates(BaseModel):
+class Coordinates(BaseModel):
     width: float
     depth: float
     height: float
 
+class Position(BaseModel):
+    startCoordinates: Coordinates
+    endCoordinates: Coordinates
 
 class ItemPlacement(BaseModel):
     itemId: str
     containerId: str
-    position: dict
-
+    position: Position
 
 class RearrangementStep(BaseModel):
     step: int
     action: str  # "move", "remove", "place"
     itemId: str
     fromContainer: str
-    fromPosition: dict
-    toPosition: Optional[dict] = None
-
-
+    fromPosition: Position
+    toContainer: Optional[str] = None
+    toPosition: Optional[Position] = None
+class Item(BaseModel):
+    itemId: str
+    name: str
+    width: float
+    depth: float
+    height: float
+    priority: int
+    expiryDate: Optional[str]  # ISO format date as a string
+    usageLimit: int
+    preferredZone: str
+class Container(BaseModel):
+    containerId: str
+    zone: str
+    width: float
+    depth: float
+    height: float
 class PlacementRequest(BaseModel):
-    items: List[dict]
-    containers: List[dict]
-
+    items: List[Item]
+    containers: List[Container]
 
 class PlacementResponse(BaseModel):
     success: bool
     placements: List[ItemPlacement]
     rearrangements: List[RearrangementStep]
-
 
 # ---------------- Cargo Placement System ----------------
 
