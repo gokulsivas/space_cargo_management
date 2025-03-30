@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 import polars as pl
 import os
 import re
 from typing import Optional
-from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep
+from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep, RetrieveItemRequest
+import datetime
+
 router = APIRouter(
     prefix="/api",
     tags=["search_retrieve"],
@@ -186,19 +188,23 @@ async def search_item(
         print(traceback.format_exc())
         return SearchResponse(success=False, found=False)
 
+
 @router.post("/retrieve")
 async def retrieve_item(
-    request: dict,
+    request: RetrieveItemRequest
 ):
     try:
         # Extract data from request
-        item_id = request.get("itemId")
-        user_id = request.get("userId")
-        timestamp = request.get("timestamp")
+        item_id = request.itemId
+        user_id = request.userId
+        timestamp = request.timestamp
         
-        # Validate required fields
-        if not item_id or not user_id or not timestamp:
-            raise HTTPException(status_code=400, detail="Missing required fields: itemId, userId, and timestamp required")
+        # Use current time in ISO format if timestamp not provided
+        if not timestamp:
+            timestamp = datetime.datetime.now().isoformat()
+        
+        # Path to the cargo arrangement CSV
+        cargo_file = "cargo_arrangement.csv"
         
         # Check if file exists
         if not os.path.exists(cargo_file):
@@ -217,6 +223,7 @@ async def retrieve_item(
         # Write the updated dataframe back to CSV
         updated_df.write_csv(cargo_file)
         
+        # Return response in the specified format
         return {"success": True}
         
     except Exception as e:
