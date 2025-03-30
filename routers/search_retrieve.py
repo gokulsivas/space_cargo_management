@@ -5,6 +5,7 @@ import re
 from typing import Optional
 from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep, RetrieveItemRequest, PlaceItemRequest, PlaceItemResponse, CargoPlacementSystem
 import datetime
+import csv
 
 router = APIRouter(
     prefix="/api",
@@ -203,27 +204,69 @@ async def retrieve_item(
         if not timestamp:
             timestamp = datetime.datetime.now().isoformat()
         
-        # Path to the cargo arrangement CSV
+        # Define file paths
+        items_file = "imported_items.csv"    
+        containers_file = "imported_containers.csv"
         cargo_file = "cargo_arrangement.csv"
         
-        # Check if file exists
-        if not os.path.exists(cargo_file):
+        # Check if files exist
+        if not all(os.path.exists(file) for file in [items_file, cargo_file]):
             return {"success": False}
         
-        # Load and process CSV data
+        # Load CSV data
+        items_df = pl.read_csv(items_file)
         cargo_df = pl.read_csv(cargo_file)
         
-        # Check if item exists
-        if cargo_df.filter(pl.col("itemId") == item_id).is_empty():
+        # Check if item exists in cargo arrangement
+        item_in_cargo = cargo_df.filter(pl.col("itemId") == item_id)
+        if item_in_cargo.is_empty():
             return {"success": False}
         
-        # Remove the item from the dataframe
-        updated_df = cargo_df.filter(pl.col("itemId") != item_id)
+        # Get the item from imported items
+        item_data = items_df.filter(pl.col("itemId") == item_id)
+        if item_data.is_empty():
+            return {"success": False}
         
-        # Write the updated dataframe back to CSV
-        updated_df.write_csv(cargo_file)
+        # Get current usage limit (ensuring we get it as an integer)
+        current_usage = int(item_data.select("usageLimit")[0, 0])
         
-        # Return response in the specified format
+        # Debug print to check initial value
+        print(f"Initial usage limit for item {item_id}: {current_usage}")
+        
+        # Check if item has any uses left
+        if current_usage <= 0:
+            print(f"Item {item_id} has no uses left")
+            return {"success": False}
+            
+        # Decrement usage limit
+        new_usage = current_usage - 1
+        print(f"New usage limit for item {item_id}: {new_usage}")
+        
+        updated_items_df = items_df.with_columns(
+            pl.when(pl.col("itemId") == item_id)
+            .then(pl.lit(new_usage))  # Use literal value instead of expression
+            .otherwise(pl.col("usageLimit"))
+            .alias("usageLimit")
+        )
+        
+        # Write updated items data to CSV
+        updated_items_df.write_csv(items_file)
+        
+        # Log the retrieval
+        log_retrieval(item_id, user_id, timestamp)
+        
+        # Only remove from cargo if usage is now 0
+        if new_usage == 0:
+            print(f"Removing item {item_id} from cargo as it has 0 uses left")
+            # Remove from cargo arrangement
+            updated_cargo_df = cargo_df.filter(pl.col("itemId") != item_id)
+            updated_cargo_df.write_csv(cargo_file)
+            
+            # Add to waste items (for tracking purposes)
+            add_to_waste_items(item_id, item_data.select("name")[0, 0], "Out of Uses", 
+                              item_in_cargo.select("containerId")[0, 0], 
+                              item_in_cargo.select("position")[0, 0])
+        
         return {"success": True}
         
     except Exception as e:
@@ -231,6 +274,37 @@ async def retrieve_item(
         import traceback
         print(traceback.format_exc())
         return {"success": False}
+
+# Helper function to add item to waste tracking
+def add_to_waste_items(item_id, name, reason, container_id, position):
+    global waste_items
+    
+    waste_item = {
+        "itemId": item_id,
+        "name": name,
+        "reason": reason,
+        "containerId": container_id,
+        "position": position
+    }
+    
+    waste_items.append(waste_item)
+
+# Helper function to log retrievals (optional)
+def log_retrieval(item_id, user_id, timestamp):
+    # You can implement logging to track retrievals
+    log_file = "item_retrievals.csv"
+    
+    # Create file with headers if it doesn't exist
+    if not os.path.exists(log_file):
+        with open(log_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['itemId', 'userId', 'timestamp'])
+    
+    # Append retrieval log
+    with open(log_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([item_id, user_id, timestamp])
+
 
 @router.post("/place", response_model=PlaceItemResponse)
 async def place_item(
