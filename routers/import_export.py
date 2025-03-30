@@ -141,6 +141,11 @@ async def import_items(file: UploadFile = File(...)):
         try:
             cargo_system.add_items(items)
             log_action("Import Items", f"Imported {len(items)} items successfully.")
+            
+            # Create imported_items.csv file
+            items_df = pl.DataFrame(items)
+            items_df.write_csv("imported_items.csv")
+            
         except Exception as e:
             log_action("Import Items Failed", f"Error: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error processing items: {str(e)}")
@@ -201,6 +206,11 @@ async def import_containers(file: UploadFile = File(...)):
         try:
             cargo_system.add_containers(containers)
             log_action("Import Containers", f"Imported {len(containers)} containers successfully.")
+            
+            # Create imported_containers.csv file
+            containers_df = pl.DataFrame(containers)
+            containers_df.write_csv("imported_containers.csv")
+            
         except Exception as e:
             log_action("Import Containers Failed", f"Error: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error processing containers: {str(e)}")
@@ -213,7 +223,6 @@ async def import_containers(file: UploadFile = File(...)):
         message="Containers imported successfully" if len(errors) == 0 else "Some containers could not be imported"
     )
 
-
 ### **3. Export Cargo Arrangement as CSV**
 @router.get("/export/arrangement")
 async def export_arrangement():
@@ -221,29 +230,38 @@ async def export_arrangement():
         result = cargo_system.optimize_placement()
         log_action("Optimize Placement", "Cargo placement optimization executed.")
 
-        print("=== Raw Optimization Result ===")
-        print(result)
-
         # Ensure 'placements' exists and is a valid DataFrame
         placements = None
         if isinstance(result, pl.DataFrame) and "placements" in result.columns:
             placements = result["placements"][0] if not result["placements"].is_null()[0] else None
 
-        print("=== Extracted Placements ===")
-        print(placements)
-
         if placements is None or placements.is_empty():
             log_action("Export Failed", "No placements available for export.")
             raise HTTPException(status_code=404, detail="No placements available.")
 
+        # Create and save the cargo_arrangement.csv file
+        arrangement_csv_path = "cargo_arrangement.csv"
+        with open(arrangement_csv_path, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["itemId", "zone", "coordinates"])
+
+            for placement in placements.iter_rows(named=True):
+                writer.writerow([
+                    placement["itemId"],
+                    placement["zone"],
+                    f"({placement['start_x']},{placement['start_y']},{placement['start_z']}),"
+                    f"({placement['end_x']},{placement['end_y']},{placement['end_z']})"
+                ])
+
+        # Prepare the response CSV with the same columns
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["Item ID", "Zone", "Coordinates (W1,D1,H1),(W2,D2,H2)"])
+        writer.writerow(["itemId", "zone", "coordinates"])
 
         for placement in placements.iter_rows(named=True):
             writer.writerow([
                 placement["itemId"],
-                placement["zone"],  # Use zone instead of containerId
+                placement["zone"],
                 f"({placement['start_x']},{placement['start_y']},{placement['start_z']}),"
                 f"({placement['end_x']},{placement['end_y']},{placement['end_z']})"
             ])
