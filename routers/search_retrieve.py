@@ -3,7 +3,7 @@ import polars as pl
 import os
 import re
 from typing import Optional
-from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep, RetrieveItemRequest
+from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep, RetrieveItemRequest, PlaceItemRequest, PlaceItemResponse, CargoPlacementSystem
 import datetime
 
 router = APIRouter(
@@ -232,30 +232,111 @@ async def retrieve_item(
         print(traceback.format_exc())
         return {"success": False}
 
-"""@router.post("/place")
+@router.post("/place", response_model=PlaceItemResponse)
 async def place_item(
-    itemId: str, 
-    userId: str, 
-    timestamp: str, 
-    containerId: str, 
-    position: dict,
-    cargo_system: CargoPlacementSystem = Depends(get_cargo_system)
+    request: PlaceItemRequest
 ):
-    result_df = cargo_system.items_df.filter(pl.col("itemId") == itemId)
-    if result_df.is_empty():
-        raise HTTPException(status_code=404, detail="Item not found.")
-
-    if "containerId" not in cargo_system.items_df.columns:
-        cargo_system.items_df = cargo_system.items_df.with_columns(pl.lit("unknown").alias("containerId"))
-
-    if "position" not in cargo_system.items_df.columns:
-        cargo_system.items_df = cargo_system.items_df.with_columns(pl.lit(None).alias("position"))
-
-    cargo_system.items_df = cargo_system.items_df.with_columns(
-        (pl.when(pl.col("itemId") == itemId).then(containerId).otherwise(pl.col("containerId"))).alias("containerId"),
-        (pl.when(pl.col("itemId") == itemId).then(str(position)).otherwise(pl.col("position"))).alias("position")
-    )
-
-    cargo_system.items_df.write_csv(ITEMS_CSV_PATH)
-
-    return {"success": True}"""
+    try:
+        # Use current time in ISO format if timestamp not provided
+        if not request.timestamp:
+            request.timestamp = datetime.datetime.now().isoformat()
+        
+        # Path to the files
+        cargo_file = "cargo_arrangement.csv"
+        containers_file = "imported_containers.csv"
+        
+        # Check if files exist
+        if not os.path.exists(cargo_file) or not os.path.exists(containers_file):
+            print(f"Required files not found")
+            return {"success": False}
+        
+        # Load and process CSV data
+        cargo_df = pl.read_csv(cargo_file)
+        containers_df = pl.read_csv(containers_file)
+        
+        # Print columns for debugging
+        print(f"Cargo columns: {cargo_df.columns}")
+        print(f"Containers columns: {containers_df.columns}")
+        
+        # Find the zone for the specified containerId
+        container_data = containers_df.filter(pl.col("containerId") == request.containerId)
+        if container_data.is_empty():
+            print(f"Container ID {request.containerId} not found")
+            return {"success": False}
+        
+        container_info = container_data.row(0, named=True)
+        zone = container_info["zone"]
+        
+        # Prepare position string for storage
+        position_str = str(request.position.model_dump())
+        
+        # Format coordinates string like "(w1,d1,h1),(w2,d2,h2)"
+        start = request.position.startCoordinates
+        end = request.position.endCoordinates
+        coordinates_str = f"({start.width},{start.depth},{start.height}),({end.width},{end.depth},{end.height})"
+        
+        # Check if item exists in cargo arrangement
+        item_exists = not cargo_df.filter(pl.col("itemId") == request.itemId).is_empty()
+        
+        # Check for overlapping items in the container
+        overlapping_items = cargo_df.filter(
+            (pl.col("zone") == zone) & 
+            (pl.col("itemId") != request.itemId)
+        )
+        
+        overlapping = False
+        for item in overlapping_items.iter_rows(named=True):
+            item_coordinates = item["coordinates"]
+            coordinates = item_coordinates.strip()[1:-1].split("),(")
+            item_start = coordinates[0].split(",")
+            item_start = (float(item_start[0]), float(item_start[1]), float(item_start[2]))
+            item_end = coordinates[1].split(",")
+            item_end = (float(item_end[0]), float(item_end[1]), float(item_end[2]))
+            
+            start = (start.width, start.depth, start.height)
+            end = (end.width, end.depth, end.height)
+            
+            # Check for overlap
+            if (start[0] < item_end[0] and end[0] > item_start[0] and 
+                start[1] < item_end[1] and end[1] > item_start[1] and 
+                start[2] < item_end[2] and end[2] > item_start[2]):
+                overlapping = True
+                break
+        
+        if overlapping:
+            print(f"Cannot place item {request.itemId} in container {request.containerId} due to overlap")
+            return {"success": False}
+        
+        if item_exists:
+            # Update existing item
+            cargo_df = cargo_df.with_columns([
+                pl.when(pl.col("itemId") == request.itemId)
+                  .then(pl.lit(zone))  
+                  .otherwise(pl.col("zone"))
+                  .alias("zone"),
+                pl.when(pl.col("itemId") == request.itemId)
+                  .then(pl.lit(coordinates_str))  
+                  .otherwise(pl.col("coordinates"))
+                  .alias("coordinates")
+            ])
+        else:
+            # Item doesn't exist in cargo arrangement, so add it
+            new_row = pl.DataFrame({
+                "itemId": [request.itemId],
+                "zone": [zone],
+                "coordinates": [coordinates_str]
+            })
+            
+            # Add the new row
+            cargo_df = pl.concat([cargo_df, new_row])
+        
+        # Save changes
+        cargo_df.write_csv(cargo_file)
+        
+        return {"success": True}
+        
+    except Exception as e:
+        print(f"Error in place endpoint: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return {"success": False}
