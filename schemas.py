@@ -322,3 +322,35 @@ class PlaceItemRequest(BaseModel):
 
 class PlaceItemResponse(BaseModel):
     success: bool
+
+class ReturnPlanRequest(BaseModel):
+    undockingContainerId: str
+    undockingDate: str
+    maxWeight: float
+
+# Complete Undocking
+class CompleteUndockingRequest(BaseModel):
+    undockingContainerId: str
+    timestamp: str
+
+class WasteItem(BaseModel):
+    itemId: int
+    name: str
+    reason: str
+    containerId: str
+    position: Position
+
+class WasteItemResponse(BaseModel):
+    success: bool
+    wasteItems: List[WasteItem] = []
+
+class WasteItemRequest(BaseModel):
+    itemId: int
+    name: str
+    reason: str
+    containerId: str
+    position: str
+
+class CompleteUndockingRequest(BaseModel):
+    undockingContainerId: str
+    timestamp: str

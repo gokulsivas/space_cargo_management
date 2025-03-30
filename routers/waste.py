@@ -178,6 +178,6 @@ async def complete_undocking(request: CompleteUndockingRequest):
         "timestamp": request.timestamp,
         "itemsRemoved": len([item for item in waste_items_df.to_dicts() if item["containerId"] == request.undockingContainerId])
     }
-    #return 
+    
     return {"success": True, "itemsRemoved": completed_undocking[request.undockingContainerId]["itemsRemoved"]}
    

@@ -1,0 +1,4 @@
+containerId,zone,width,depth,height
+contA,Crew Quarters,100.0,85.0,200.0
+contB,Airlock,50.0,85.0,200.0
+contC,Laboratory,200.0,85.0,200.0

@@ -1,0 +1,4 @@
+itemId,name,width,depth,height,mass,priority,expiryDate,usageLimit,preferredZone
+1,Food Packet,10.0,10.0,20.0,5.0,80,20-05-25,0,Crew Quarters
+2,Oxygen Cylinder,15.0,15.0,50.0,30.0,95,,100,Airlock
+3,First Aid Kit,20.0,20.0,10.0,2.0,100,10-07-25,0,Laboratory
