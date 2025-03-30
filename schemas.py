@@ -312,3 +312,13 @@ class SearchResponse(BaseModel):
     found: bool
     item: Optional[Item_for_search] = None
     retrievalSteps: List[RetrievalStep] = []
+
+class PlaceItemRequest(BaseModel):
+    itemId: int = Field(..., description="Unique identifier for the item")
+    userId: str = Field(..., description="ID of the user placing the item")
+    timestamp: Optional[str] = Field(None, description="Timestamp of placement (ISO format)")
+    containerId: str = Field(..., description="Container where the item is kept")
+    position: Position = Field(..., description="Position coordinates of the item")
+
+class PlaceItemResponse(BaseModel):
+    success: bool
