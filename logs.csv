@@ -1,0 +1,7 @@
+timestamp,userId,actionType,itemId,details
+2025-03-30T10:39:44.335372+00:00,"",Import Containers,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Imported 3 containers successfully.""}"
+2025-03-30T10:39:51.069424+00:00,"",Import Items,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Imported 3 items successfully.""}"
+2025-03-30T10:44:01.064936+00:00,"",Import Containers,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Imported 3 containers successfully.""}"
+2025-03-30T10:44:09.646855+00:00,"",Import Items,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Imported 3 items successfully.""}"
+2025-03-30T10:44:16.266444+00:00,"",Optimize Placement,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Cargo placement optimization executed.""}"
+2025-03-30T10:44:16.281081+00:00,"",Export Arrangement,"","{""fromContainer"": """", ""toContainer"": """", ""reason"": ""Exported cargo arrangement successfully.""}"

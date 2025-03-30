@@ -2,6 +2,8 @@ import polars as pl
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import date
+import traceback
+import os
 
 class Octant:
     """Represents a node (octant) in the Octree."""
@@ -120,16 +122,13 @@ class PlacementResponse(BaseModel):
 
 # ---------------- Cargo Placement System ----------------
 
+# Modified CargoPlacementSystem class
 class CargoPlacementSystem:
     def __init__(self):
         self.items_df = pl.DataFrame()
         self.containers_df = pl.DataFrame()
-
-        # Modify octree storage to use `zone` instead of `containerId`
-        self.octrees = pl.DataFrame({
-            "zone": [],
-            "octree": []
-        })
+        self.octrees = {}  # Store octrees separately in a dictionary
+        self.loading_log = []  # Added loading_log attribute
 
     def add_items(self, items: List[dict]):
         """Store items in a Polars DataFrame."""
@@ -139,20 +138,26 @@ class CargoPlacementSystem:
         """Store containers and initialize Octrees using zone."""
         self.containers_df = pl.DataFrame(containers)
 
-        print("=== Containers DataFrame ===")
-        print(self.containers_df)
-
-        # Keep existing container import code
-        self.octrees = {}  # Store octrees separately in a dictionary
-
         # Initialize octrees using the zone instead of containerId
         for container in self.containers_df.iter_rows(named=True):
-            zone = container["zone"]  # Use zone as the key
+            zone = container["zone"].strip()  # Ensure no leading/trailing spaces
             self.octrees[zone] = Octree(container)  # Create and store the octree
 
-        print("=== Initialized Octrees ===")
-        print(self.octrees)
+    def load_from_csv(self, items_path: str, containers_path: str):
+        self.loading_log.append("Loading CSV data...")
 
+        try:
+            if os.path.exists(items_path) and os.path.getsize(items_path) > 0:
+                self.items_df = pl.read_csv(items_path)
+                self.loading_log.append("Items data loaded successfully.")
+
+            if os.path.exists(containers_path) and os.path.getsize(containers_path) > 0:
+                self.containers_df = pl.read_csv(containers_path)
+                self.loading_log.append("Containers data loaded successfully.")
+
+        except Exception as e:
+            self.loading_log.append(f"Error loading data: {str(e)}")
+            self.loading_log.append(traceback.format_exc())
 
     def optimize_placement(self):
         """Places items using Octree, now indexed by zone instead of containerId."""
@@ -162,6 +167,20 @@ class CargoPlacementSystem:
         if self.items_df.is_empty() or self.containers_df.is_empty():
             print("Error: No items or containers available.")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
+
+        # Create default placement structure if no items can be placed
+        if "itemId" in self.items_df.columns:
+            default_placements = {
+                "itemId": [],
+                "zone": [],
+                "start_x": [],
+                "start_y": [],
+                "start_z": [],
+                "end_x": [],
+                "end_y": [],
+                "end_z": []
+            }
+            placements_df = pl.DataFrame(default_placements)
 
         sorted_items_df = self.items_df.sort("priority", descending=True)
 
@@ -189,6 +208,16 @@ class CargoPlacementSystem:
             else:
                 print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
 
+        # Default empty rearrangements dataframe
+        default_rearrangements = {
+            "step": [],
+            "action": [],
+            "itemId": [],
+            "fromContainer": [],
+            "toContainer": []
+        }
+        rearrangements_df = pl.DataFrame(default_rearrangements)
+
         return pl.DataFrame({
             "success": [True],
             "placements": [placements_df],
@@ -197,11 +226,13 @@ class CargoPlacementSystem:
 
 
 
-
 # ---------------- Cargo Classification System ----------------
 class CargoClassificationSystem:
     def __init__(self):
         self.items_df = pl.DataFrame()
+        self.containers_df = pl.DataFrame()
+        self.octrees = {}  # Store octrees separately in a dictionary
+        self.loading_log = []
 
     def add_classified_items(self, items: List[dict]):
         """Add classified items to the system using Polars DataFrame."""
