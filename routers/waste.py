@@ -1,12 +1,13 @@
 import json
 import re
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Tuple
 import csv
+import os
+from fastapi import APIRouter, HTTPException
+from typing import List, Dict
 import polars as pl
 from pydantic import BaseModel
-from schemas import ReturnPlanStep, ReturnPlanRequest, CompleteUndockingRequest, Position, RetrievalStep, ReturnItem, ReturnManifest, ReturnPlanResponse, Object3D, Octree
-import os
+from datetime import datetime
+from schemas import Position, ReturnPlanRequest, ReturnPlanResponse, ReturnItem, ReturnPlanStep, RetrievalStep, CompleteUndockingRequest, Object3D, ReturnManifest
 
 router = APIRouter(
     prefix="/api/waste",
@@ -19,24 +20,20 @@ def parse_position(position_str: str) -> dict:
     "(x,y,z),(x,y,z)"
     and return a dict with startCoordinates and endCoordinates.
     """
-    # Use regex to extract the content inside each pair of parentheses
     pattern = r"\((.*?)\)"
     matches = re.findall(pattern, position_str)
 
     if len(matches) != 2:
-        # Fallback default if the format is not as expected
         return {
             "startCoordinates": {"width": 0, "depth": 0, "height": 0},
             "endCoordinates": {"width": 0, "depth": 0, "height": 0}
         }
 
     try:
-        # For each tuple string, split by comma and convert to float (or int)
         def parse_tuple(tuple_str: str) -> dict:
             values = [float(v) for v in tuple_str.split(",")]
-            # Assuming the order is (width, depth, height)
             return {"width": values[0], "depth": values[1], "height": values[2]}
-
+        
         start_coords = parse_tuple(matches[0])
         end_coords = parse_tuple(matches[1])
         
@@ -54,75 +51,122 @@ def parse_position(position_str: str) -> dict:
 @router.get("/identify")
 async def identify_waste():
     waste_file = "waste_items.csv"
-    
-    if not os.path.exists(waste_file):
-        return {"success": False, "wasteItems": []}
-    
-    try:
-        waste_df = pl.read_csv(waste_file)
-        
-        if waste_df.is_empty():
-            return {"success": False, "wasteItems": []}
+    imported_file = "imported_items.csv"
+    waste_items = []
 
-        waste_items_raw = waste_df.to_dicts()
-        waste_items = []
-
-        for item in waste_items_raw:
-            position_value = item.get("position", "")
-            # Determine if it looks like a JSON string (starts with {) or our tuple style (starts with ()
-            if isinstance(position_value, str):
-                if position_value.strip().startswith("{"):
-                    print("Detected JSON format")
-                    # if it's JSON, attempt to load via json.loads
-                    try:
-                        print("Parsing JSON")
-                        position_dict = json.loads(position_value)
-                    except Exception as e:
-                        print(f"JSON parsing error: {str(e)}")
+    # Load existing waste items from waste_items.csv if it exists.
+    if os.path.exists(waste_file):
+        try:
+            waste_df = pl.read_csv(waste_file)
+            if not waste_df.is_empty():
+                for item in waste_df.to_dicts():
+                    position_value = item.get("position", "")
+                    if isinstance(position_value, str):
+                        if position_value.strip().startswith("{"):
+                            try:
+                                position_dict = json.loads(position_value)
+                            except Exception as e:
+                                print(f"JSON parsing error: {str(e)}")
+                                position_dict = {
+                                    "startCoordinates": {"width": 0, "depth": 0, "height": 0},
+                                    "endCoordinates": {"width": 0, "depth": 0, "height": 0}
+                                }
+                        elif position_value.strip().startswith("("):
+                            position_dict = parse_position(position_value)
+                        else:
+                            position_dict = {
+                                "startCoordinates": {"width": 0, "depth": 0, "height": 0},
+                                "endCoordinates": {"width": 0, "depth": 0, "height": 0}
+                            }
+                    else:
                         position_dict = {
                             "startCoordinates": {"width": 0, "depth": 0, "height": 0},
                             "endCoordinates": {"width": 0, "depth": 0, "height": 0}
                         }
-                elif position_value.strip().startswith("("):
-                    print("Detected tuple-like format")
-                    # Use our custom parser for tuple-like strings
-                    position_dict = parse_position(position_value)
-                else:
-                    print("Position string not in recognized format")
-                    position_dict = {
+                    
+                    position_model = Position(
+                        startCoordinates=position_dict.get("startCoordinates", {"width": 0, "depth": 0, "height": 0}),
+                        endCoordinates=position_dict.get("endCoordinates", {"width": 0, "depth": 0, "height": 0})
+                    )
+                    
+                    # Fix: Ensure itemId is cast to int safely with default value
+                    try:
+                        item_id = int(item.get("itemId", "0"))
+                    except ValueError:
+                        item_id = 0
+                    
+                    formatted_item = {
+                        "itemId": item_id,
+                        "name": str(item.get("name", "")),
+                        "reason": str(item.get("reason", "")),
+                        "containerId": str(item.get("containerId", "")),
+                        "position": position_model.dict()
+                    }
+                    waste_items.append(formatted_item)
+        except Exception as e:
+            print(f"Error reading waste_items.csv: {str(e)}")
+    
+    # Now, check imported_items.csv for expired items.
+    if os.path.exists(imported_file):
+        try:
+            imported_df = pl.read_csv(imported_file)
+            if "expiryDate" in imported_df.columns:
+                current_date = datetime.now().date()
+                # Filter rows where expiryDate (formatted as DD-MM-YY) is before the current date
+                expired_df = imported_df.filter(
+                    pl.col("expiryDate").str.strptime(pl.Date, format="%d-%m-%y") < current_date
+                )
+                
+                for item in expired_df.to_dicts():
+                    # Lookup containerId from imported_containers.csv using the preferredZone field.
+                    container_id = ""
+                    if os.path.exists("imported_containers.csv"):
+                        try:
+                            containers_df = pl.read_csv("imported_containers.csv")
+                            # Assume imported_containers.csv has columns: containerId, zone, ...
+                            matching_container = containers_df.filter(pl.col("zone") == item.get("preferredZone", "")).to_dicts()
+                            if matching_container:
+                                container_id = str(matching_container[0].get("containerId", ""))
+                        except Exception as e:
+                            print(f"Error reading imported_containers.csv: {str(e)}")
+                    
+                    # Lookup coordinates from cargo_arrangement.csv using the item's itemId.
+                    coordinates = {
                         "startCoordinates": {"width": 0, "depth": 0, "height": 0},
                         "endCoordinates": {"width": 0, "depth": 0, "height": 0}
                     }
-            else:
-                print("Position value is not a string")
-                position_dict = {
-                    "startCoordinates": {"width": 0, "depth": 0, "height": 0},
-                    "endCoordinates": {"width": 0, "depth": 0, "height": 0}
-                }
-            
-            # Create Position model (for instance, if you have additional validations in it)
-            position_model = Position(
-                startCoordinates=position_dict.get("startCoordinates", {"width": 0, "depth": 0, "height": 0}),
-                endCoordinates=position_dict.get("endCoordinates", {"width": 0, "depth": 0, "height": 0})
-            )
-            
-            formatted_item = {
-                "itemId": str(item.get("itemId", "")),
-                "name": str(item.get("name", "")),
-                "reason": str(item.get("reason", "")),
-                "containerId": str(item.get("containerId", "")),
-                "position": position_model.dict()
-            }
-            
-            waste_items.append(formatted_item)
-        
-        return {"success": True, "wasteItems": waste_items}
+                    if os.path.exists("cargo_arrangement.csv"):
+                        try:
+                            cargo_df = pl.read_csv("cargo_arrangement.csv")
+                            # Fix: Cast both sides to string for comparison
+                            cargo_matching = cargo_df.filter(pl.col("itemId").cast(pl.Utf8) == str(item.get("itemId", ""))).to_dicts()
+                            print(f"cargo_matching: {cargo_matching}")
+                            if cargo_matching:
+                                pos_str = cargo_matching[0].get("coordinates", "")
+                                if pos_str:
+                                    coordinates = parse_position(pos_str)
+                        except Exception as e:
+                            print(f"Error reading cargo_arrangement.csv: {str(e)}")
+                    
+                    # Fix: Ensure itemId is cast to int safely with default value
+                    try:
+                        item_id = int(item.get("itemId", "0"))
+                    except ValueError:
+                        item_id = 0
+                    
+                    expired_item = {
+                        "itemId": item_id,
+                        "name": str(item.get("name", "")),
+                        "reason": "Expired",
+                        "containerId": container_id,
+                        "position": coordinates
+                    }
+                    if not any(w["itemId"] == expired_item["itemId"] for w in waste_items):
+                        waste_items.append(expired_item)
+        except Exception as e:
+            print(f"Error processing imported_items.csv for expiry: {str(e)}")
     
-    except Exception as e:
-        print(f"Error in identify_waste endpoint: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-        return {"success": False, "wasteItems": []}
+    return {"success": True, "wasteItems": waste_items}
 
 def calculate_volume(obj):
     width = abs(obj.end["width"] - obj.start["width"])
@@ -138,7 +182,14 @@ def load_imported_items(filename):
     with open(filename, newline="") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            imported_items[row["itemId"]] = float(row.get("mass", 0))
+            # Fix: Ensure proper handling of empty itemId
+            item_id = row.get("itemId", "")
+            if item_id:
+                try:
+                    mass = float(row.get("mass", 0))
+                except ValueError:
+                    mass = 0
+                imported_items[item_id] = mass
     
     return imported_items
 
@@ -148,7 +199,7 @@ def read_waste_data(waste_filename, imported_filename):
     weights = {}
 
     if not os.path.exists(waste_filename):
-        return objects
+        return objects, weights
     
     with open(waste_filename, newline="") as csvfile:
         reader = csv.DictReader(csvfile)
@@ -164,17 +215,13 @@ def read_waste_data(waste_filename, imported_filename):
                 coordinates["endCoordinates"]
             )
             objects.append(obj)
-            weights[item_id] = weight  # Store weight in a dictionary
+            weights[item_id] = weight
 
     return objects, weights
 
-
 @router.post("/return-plan", response_model=ReturnPlanResponse)
 async def generate_return_plan(request: ReturnPlanRequest):
-    # Read all waste data
     waste_objects_all, weights = read_waste_data("waste_items.csv", "imported_items.csv")
-    
-    # Filter objects by the requested container ID
     waste_objects = [obj for obj in waste_objects_all if obj.containerId == request.undockingContainerId]
     
     return_plan = []
@@ -186,7 +233,7 @@ async def generate_return_plan(request: ReturnPlanRequest):
     
     while waste_objects:
         front_obj = min(waste_objects, key=lambda obj: obj.front_z, default=None)
-        front_weight = weights.get(front_obj.itemId, 0) if front_obj else 0  # Get weight from dictionary
+        front_weight = weights.get(front_obj.itemId, 0) if front_obj else 0
 
         if front_obj and total_weight + front_weight <= request.maxWeight:
             retrieval_steps.append(RetrievalStep(step=step_counter, action="remove", itemId=front_obj.itemId, itemName=front_obj.name))
@@ -218,39 +265,26 @@ async def generate_return_plan(request: ReturnPlanRequest):
         returnManifest=manifest
     )
 
-
 @router.post("/complete-undocking")
 async def complete_undocking(request: CompleteUndockingRequest):
     waste_file = "waste_items.csv"
-    items_file = "imported_items.csv"  # Assuming this is where you store item usage data
-    
-    # Count items to be removed
+    items_file = "imported_items.csv"
     items_count = 0
     
-    # First, process existing waste items
     if os.path.exists(waste_file):
         try:
             waste_items_df = pl.read_csv(waste_file)
             if not waste_items_df.is_empty():
-                # Filter items to count
                 filtered_df = waste_items_df.filter(pl.col("containerId") == request.undockingContainerId)
                 items_count = filtered_df.height
-                
-                # Update the waste_items.csv file by removing these items
                 updated_df = waste_items_df.filter(pl.col("containerId") != request.undockingContainerId)
-                waste_items_df = updated_df  # Keep the updated DataFrame for later use
                 updated_df.write_csv(waste_file)
         except Exception as e:
             print(f"Error processing waste items: {str(e)}")
     
-    # Now check for items that have reached their usage limit
     if os.path.exists(items_file):
         try:
-            # Read the items file
             items_df = pl.read_csv(items_file)
-            
-            # Filter items that have reached their usage limit (assuming there's a column for this)
-            # You'll need to adjust this based on your actual data structure
             if "usageCount" in items_df.columns and "usageLimit" in items_df.columns:
                 expired_items = items_df.filter(
                     (pl.col("usageCount") >= pl.col("usageLimit")) & 
@@ -258,15 +292,10 @@ async def complete_undocking(request: CompleteUndockingRequest):
                 )
                 
                 if not expired_items.is_empty():
-                    # Convert expired items to waste items format
                     new_waste_items = []
                     
                     for item in expired_items.to_dicts():
-                        # Create a position string if needed
-                        position_str = f"(0,0,0),(0,0,0)"  # Default position
-                        if "position" in item:
-                            position_str = item["position"]
-                        
+                        position_str = f"(0,0,0),(0,0,0)"
                         new_waste_item = {
                             "itemId": item["itemId"],
                             "name": item["name"] if "name" in item else f"Item {item['itemId']}",
@@ -276,22 +305,16 @@ async def complete_undocking(request: CompleteUndockingRequest):
                         }
                         new_waste_items.append(new_waste_item)
                     
-                    # Create a DataFrame from the new waste items
                     new_waste_df = pl.DataFrame(new_waste_items)
                     
-                    # Append to the existing waste items file
-                    if os.path.exists(waste_file) and not waste_items_df.is_empty():
-                        combined_df = pl.concat([waste_items_df, new_waste_df])
+                    if os.path.exists(waste_file) and not pl.read_csv(waste_file).is_empty():
+                        combined_df = pl.concat([pl.read_csv(waste_file), new_waste_df])
                         combined_df.write_csv(waste_file)
                     else:
                         new_waste_df.write_csv(waste_file)
                     
-                    # Add the count of new waste items
                     items_count += new_waste_df.height
                     
-                    # Update the items file to mark these items as processed
-                    # This depends on your business logic - you might want to remove them,
-                    # or update a status field, or reset their usage count
                     items_df = items_df.filter(
                         ~((pl.col("usageCount") >= pl.col("usageLimit")) & 
                           (pl.col("containerId") == request.undockingContainerId))
@@ -300,7 +323,5 @@ async def complete_undocking(request: CompleteUndockingRequest):
         
         except Exception as e:
             print(f"Error processing items at usage limit: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
     
     return {"success": True, "itemsRemoved": items_count}
