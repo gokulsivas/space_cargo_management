@@ -53,6 +53,7 @@ async def identify_waste():
     waste_file = "waste_items.csv"
     imported_file = "imported_items.csv"
     waste_items = []
+    new_waste_items = []  # To track newly identified waste items for appending
 
     # Load existing waste items from waste_items.csv if it exists.
     if os.path.exists(waste_file):
@@ -135,16 +136,18 @@ async def identify_waste():
                         "startCoordinates": {"width": 0, "depth": 0, "height": 0},
                         "endCoordinates": {"width": 0, "depth": 0, "height": 0}
                     }
+                    position_str = "(0,0,0),(0,0,0)"  # Default value for CSV
+                    
                     if os.path.exists("cargo_arrangement.csv"):
                         try:
                             cargo_df = pl.read_csv("cargo_arrangement.csv")
                             # Fix: Cast both sides to string for comparison
                             cargo_matching = cargo_df.filter(pl.col("itemId").cast(pl.Utf8) == str(item.get("itemId", ""))).to_dicts()
-                            print(f"cargo_matching: {cargo_matching}")
                             if cargo_matching:
                                 pos_str = cargo_matching[0].get("coordinates", "")
                                 if pos_str:
                                     coordinates = parse_position(pos_str)
+                                    position_str = pos_str
                         except Exception as e:
                             print(f"Error reading cargo_arrangement.csv: {str(e)}")
                     
@@ -154,19 +157,61 @@ async def identify_waste():
                     except ValueError:
                         item_id = 0
                     
+                    # Create the formatted item for the API response
+                    position_model = Position(
+                        startCoordinates=coordinates.get("startCoordinates", {"width": 0, "depth": 0, "height": 0}),
+                        endCoordinates=coordinates.get("endCoordinates", {"width": 0, "depth": 0, "height": 0})
+                    )
+                    
+                    item_name = str(item.get("name", ""))
+                    
                     expired_item = {
                         "itemId": item_id,
-                        "name": str(item.get("name", "")),
+                        "name": item_name,
                         "reason": "Expired",
                         "containerId": container_id,
-                        "position": coordinates
+                        "position": position_model.dict()
                     }
+                    
+                    # Create a simple dictionary for CSV export
+                    csv_item = {
+                        "itemId": item_id,
+                        "name": item_name,
+                        "reason": "Expired",
+                        "containerId": container_id,
+                        "position": position_str
+                    }
+                    
+                    # Only add to waste items if not already there
                     if not any(w["itemId"] == expired_item["itemId"] for w in waste_items):
                         waste_items.append(expired_item)
+                        new_waste_items.append(csv_item)
+                        
+            # Now append the new waste items to waste_items.csv
+            if new_waste_items:
+                # Create the DataFrame with new waste items
+                new_waste_df = pl.DataFrame(new_waste_items)
+                
+                # If the waste file exists, append to it, otherwise create it
+                if os.path.exists(waste_file):
+                    # Read existing file
+                    try:
+                        existing_waste_df = pl.read_csv(waste_file)
+                        # Concatenate and write back
+                        combined_df = pl.concat([existing_waste_df, new_waste_df])
+                        combined_df.write_csv(waste_file)
+                    except Exception as e:
+                        print(f"Error appending to waste_items.csv: {str(e)}")
+                        # If error reading, just write the new items
+                        new_waste_df.write_csv(waste_file)
+                else:
+                    # Create new file with waste items
+                    new_waste_df.write_csv(waste_file)
+                    
         except Exception as e:
             print(f"Error processing imported_items.csv for expiry: {str(e)}")
     
-    return {"success": True, "wasteItems": waste_items}
+    return {"success": True, "wasteItems": waste_items, "newWasteItemsAdded": len(new_waste_items)}
 
 def calculate_volume(obj):
     width = abs(obj.end["width"] - obj.start["width"])
