@@ -91,20 +91,20 @@ class Position(BaseModel):
     endCoordinates: Coordinates
 
 class ItemPlacement(BaseModel):
-    itemId: str
+    itemId: int
     containerId: str
     position: Position
 
 class RearrangementStep(BaseModel):
     step: int
     action: str  # "move", "remove", "place"
-    itemId: str
+    itemId: int
     fromContainer: str
     fromPosition: Position
     toContainer: Optional[str] = None
     toPosition: Optional[Position] = None
 class Item(BaseModel):
-    itemId: str
+    itemId: int
     name: str
     width: float
     depth: float
@@ -300,7 +300,7 @@ class ImportContainersResponse(BaseModel):
 
 class CargoArrangementExport(BaseModel):
     """Schema for exporting cargo arrangement as CSV."""
-    itemId: str
+    itemId: int
     containerId: str
     position: Coordinates
 
@@ -365,14 +365,14 @@ class CompleteUndockingRequest(BaseModel):
 
 class ReturnPlanStep(BaseModel):
     step: int
-    itemId: str
+    itemId: int
     itemName: str
     fromContainer: str
     toContainer: str
 
 
 class ReturnItem(BaseModel):
-    itemId: str
+    itemId: int
     name: str
     reason: str
 
