@@ -124,6 +124,12 @@ async def identify_waste():
         print(traceback.format_exc())
         return {"success": False, "wasteItems": []}
 
+def calculate_volume(obj):
+    width = abs(obj.end["width"] - obj.start["width"])
+    depth = abs(obj.end["depth"] - obj.start["depth"])
+    height = abs(obj.end["height"] - obj.start["height"])
+    return width * depth * height
+
 def load_imported_items(filename):
     imported_items = {}
     if not os.path.exists(filename):
@@ -165,7 +171,11 @@ def read_waste_data(waste_filename, imported_filename):
 
 @router.post("/return-plan", response_model=ReturnPlanResponse)
 async def generate_return_plan(request: ReturnPlanRequest):
-    waste_objects, weights = read_waste_data("waste_items.csv", "imported_items.csv")
+    # Read all waste data
+    waste_objects_all, weights = read_waste_data("waste_items.csv", "imported_items.csv")
+    
+    # Filter objects by the requested container ID
+    waste_objects = [obj for obj in waste_objects_all if obj.containerId == request.undockingContainerId]
     
     return_plan = []
     retrieval_steps = []
@@ -185,10 +195,11 @@ async def generate_return_plan(request: ReturnPlanRequest):
                 itemId=front_obj.itemId,
                 itemName=front_obj.name,
                 fromContainer=request.undockingContainerId,
-                toContainer="return"
+                toContainer=front_obj.containerId
             ))
             return_items.append(ReturnItem(itemId=front_obj.itemId, name=front_obj.name, reason="Out of use"))
             total_weight += front_weight
+            total_volume += calculate_volume(front_obj)
             waste_objects.remove(front_obj)
             step_counter += 1
     
@@ -208,19 +219,15 @@ async def generate_return_plan(request: ReturnPlanRequest):
     )
 
 
-
 @router.post("/complete-undocking")
 async def complete_undocking(request: CompleteUndockingRequest):
-    global completed_undocking
     waste_file = "waste_items.csv"
-    """
-    # Verify if the container exists in return plans
-    if request.undockingContainerId not in [plan["undockingContainerId"] for plan in return_plans]:
-        raise HTTPException(status_code=404, detail="Return plan not found for this container.")"""
+    items_file = "imported_items.csv"  # Assuming this is where you store item usage data
     
     # Count items to be removed
     items_count = 0
     
+    # First, process existing waste items
     if os.path.exists(waste_file):
         try:
             waste_items_df = pl.read_csv(waste_file)
@@ -231,14 +238,69 @@ async def complete_undocking(request: CompleteUndockingRequest):
                 
                 # Update the waste_items.csv file by removing these items
                 updated_df = waste_items_df.filter(pl.col("containerId") != request.undockingContainerId)
+                waste_items_df = updated_df  # Keep the updated DataFrame for later use
                 updated_df.write_csv(waste_file)
         except Exception as e:
             print(f"Error processing waste items: {str(e)}")
     
-    # Store undocking information
-    completed_undocking[request.undockingContainerId] = {
-        "timestamp": request.timestamp,
-        "itemsRemoved": items_count
-    }
+    # Now check for items that have reached their usage limit
+    if os.path.exists(items_file):
+        try:
+            # Read the items file
+            items_df = pl.read_csv(items_file)
+            
+            # Filter items that have reached their usage limit (assuming there's a column for this)
+            # You'll need to adjust this based on your actual data structure
+            if "usageCount" in items_df.columns and "usageLimit" in items_df.columns:
+                expired_items = items_df.filter(
+                    (pl.col("usageCount") >= pl.col("usageLimit")) & 
+                    (pl.col("containerId") == request.undockingContainerId)
+                )
+                
+                if not expired_items.is_empty():
+                    # Convert expired items to waste items format
+                    new_waste_items = []
+                    
+                    for item in expired_items.to_dicts():
+                        # Create a position string if needed
+                        position_str = f"(0,0,0),(0,0,0)"  # Default position
+                        if "position" in item:
+                            position_str = item["position"]
+                        
+                        new_waste_item = {
+                            "itemId": item["itemId"],
+                            "name": item["name"] if "name" in item else f"Item {item['itemId']}",
+                            "reason": "Usage limit reached",
+                            "containerId": item["containerId"],
+                            "position": position_str
+                        }
+                        new_waste_items.append(new_waste_item)
+                    
+                    # Create a DataFrame from the new waste items
+                    new_waste_df = pl.DataFrame(new_waste_items)
+                    
+                    # Append to the existing waste items file
+                    if os.path.exists(waste_file) and not waste_items_df.is_empty():
+                        combined_df = pl.concat([waste_items_df, new_waste_df])
+                        combined_df.write_csv(waste_file)
+                    else:
+                        new_waste_df.write_csv(waste_file)
+                    
+                    # Add the count of new waste items
+                    items_count += new_waste_df.height
+                    
+                    # Update the items file to mark these items as processed
+                    # This depends on your business logic - you might want to remove them,
+                    # or update a status field, or reset their usage count
+                    items_df = items_df.filter(
+                        ~((pl.col("usageCount") >= pl.col("usageLimit")) & 
+                          (pl.col("containerId") == request.undockingContainerId))
+                    )
+                    items_df.write_csv(items_file)
+        
+        except Exception as e:
+            print(f"Error processing items at usage limit: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
     
     return {"success": True, "itemsRemoved": items_count}
