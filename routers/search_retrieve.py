@@ -271,7 +271,8 @@ async def retrieve_item(
             container_id_df = containers_df.filter(pl.col("zone") == zone)
             if container_id_df.is_empty():
                 print("Error: No container found for the given zone.")
-                return {"success": False}
+                if new_usage == 0 and (item_id not in cargo_df["itemId"].to_list()):
+                    return {"success": False}
 
             container_id = container_id_df.select("containerId")[0, 0]
             position_data = item_in_cargo.select("coordinates")[0, 0]
@@ -295,23 +296,30 @@ async def retrieve_item(
 
 
 # Helper function to add item to waste tracking
+
+# Fixed add_to_waste_items function
 def add_to_waste_items(item_id, name, reason, container_id, position):
     waste_file = "waste_items.csv"
     
     # Create the waste_items.csv if it doesn't exist
     if not os.path.exists(waste_file):
         waste_df = pl.DataFrame({
-            "itemId": [str(item_id)],
+            "itemId": [int(item_id)],
             "name": [name],
             "reason": [reason],
             "containerId": [str(container_id)],
             "position": [str(position)]
         })
+        print("Initial waste_df schema:")
+        print(waste_df.schema)
         waste_df.write_csv(waste_file)
+        return
     
     # Load existing waste items
     try:
         waste_df = pl.read_csv(waste_file)
+        print("Loaded waste_df schema:")
+        print(waste_df.schema)
     except:
         waste_df = pl.DataFrame({
             "itemId": [],
@@ -320,21 +328,24 @@ def add_to_waste_items(item_id, name, reason, container_id, position):
             "containerId": [],
             "position": []
         })
+        print("Empty waste_df schema:")
+        print(waste_df.schema)
     
     # Add new waste item
     new_waste_item = pl.DataFrame({
-        "itemId": [str(item_id)],
+        "itemId": [int(item_id)],
         "name": [name],
         "reason": [reason],
         "containerId": [str(container_id)],
         "position": [str(position)]
     })
-    
-    # Concatenate and save
+
+    # Concatenate and save - without trying to cast types
     updated_waste_df = pl.concat([waste_df, new_waste_item])
     updated_waste_df.write_csv(waste_file)
     
     print(f"Added item {item_id} to waste items with reason: {reason}")
+
 
 
 # Helper function to log retrievals (optional)
