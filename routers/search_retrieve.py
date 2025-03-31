@@ -296,42 +296,10 @@ async def retrieve_item(
 
 
 # Helper function to add item to waste tracking
-
-# Fixed add_to_waste_items function
 def add_to_waste_items(item_id, name, reason, container_id, position):
     waste_file = "waste_items.csv"
     
-    # Create the waste_items.csv if it doesn't exist
-    if not os.path.exists(waste_file):
-        waste_df = pl.DataFrame({
-            "itemId": [int(item_id)],
-            "name": [name],
-            "reason": [reason],
-            "containerId": [str(container_id)],
-            "position": [str(position)]
-        })
-        print("Initial waste_df schema:")
-        print(waste_df.schema)
-        waste_df.write_csv(waste_file)
-        return
-    
-    # Load existing waste items
-    try:
-        waste_df = pl.read_csv(waste_file)
-        print("Loaded waste_df schema:")
-        print(waste_df.schema)
-    except:
-        waste_df = pl.DataFrame({
-            "itemId": [],
-            "name": [],
-            "reason": [],
-            "containerId": [],
-            "position": []
-        })
-        print("Empty waste_df schema:")
-        print(waste_df.schema)
-    
-    # Add new waste item
+    # Create a new waste item entry
     new_waste_item = pl.DataFrame({
         "itemId": [int(item_id)],
         "name": [name],
@@ -339,13 +307,28 @@ def add_to_waste_items(item_id, name, reason, container_id, position):
         "containerId": [str(container_id)],
         "position": [str(position)]
     })
-
-    # Concatenate and save - without trying to cast types
-    updated_waste_df = pl.concat([waste_df, new_waste_item])
-    updated_waste_df.write_csv(waste_file)
+    
+    # Check if the waste_items.csv file exists
+    if not os.path.exists(waste_file):
+        # If file doesn't exist, create it with the new waste item
+        print(f"Creating new waste_items.csv file with item {item_id}")
+        new_waste_item.write_csv(waste_file)
+    else:
+        try:
+            # Load existing waste items
+            waste_df = pl.read_csv(waste_file)
+            print(f"Appending item {item_id} to existing waste_items.csv")
+            
+            # Append the new waste item to existing data and save
+            updated_waste_df = pl.concat([waste_df, new_waste_item])
+            updated_waste_df.write_csv(waste_file)
+        except Exception as e:
+            print(f"Error appending to waste_items.csv: {str(e)}")
+            # If there's an error reading the file, create a new one
+            print(f"Creating new waste_items.csv file with item {item_id}")
+            new_waste_item.write_csv(waste_file)
     
     print(f"Added item {item_id} to waste items with reason: {reason}")
-
 
 
 # Helper function to log retrievals (optional)
@@ -363,7 +346,6 @@ def log_retrieval(item_id, user_id, timestamp):
     with open(log_file, 'a', newline='') as f:
         writer = csv.writer(f)
         writer.writerow([item_id, user_id, timestamp])
-
 
 @router.post("/place", response_model=PlaceItemResponse)
 async def place_item(
