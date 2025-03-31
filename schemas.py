@@ -114,8 +114,8 @@ class Item(BaseModel):
     usageLimit: int
     preferredZone: str
 class Container(BaseModel):
-    containerId: str
     zone: str
+    containerId: str
     width: float
     depth: float
     height: float
@@ -280,8 +280,8 @@ class ItemModel(BaseModel):
 
 # 🚀 **Define Pydantic Model for Container Validation**
 class ContainerModel(BaseModel):
-    containerId: int
     zone: str
+    containerId: int
     width: float
     depth: float
     height: float
