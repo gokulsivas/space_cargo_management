@@ -1,6 +1,6 @@
 import polars as pl
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from datetime import date
 import traceback
 import os
@@ -61,6 +61,14 @@ class Octant:
 
         return None  # No space found
 
+class Object3D:
+    def __init__(self, itemId, name, containerId, start, end):
+        self.itemId = itemId
+        self.name = name
+        self.containerId = containerId
+        self.start = start
+        self.end = end
+        self.front_z = min(start['height'], end['height'])
 
 class Octree:
     """Octree structure for managing storage placement."""
@@ -354,3 +362,33 @@ class WasteItemRequest(BaseModel):
 class CompleteUndockingRequest(BaseModel):
     undockingContainerId: str
     timestamp: str
+
+class ReturnPlanStep(BaseModel):
+    step: int
+    itemId: str
+    itemName: str
+    fromContainer: str
+    toContainer: str
+
+
+class ReturnItem(BaseModel):
+    itemId: str
+    name: str
+    reason: str
+
+class ReturnManifest(BaseModel):
+    undockingContainerId: str
+    undockingDate: str
+    returnItems: List[ReturnItem]
+    totalVolume: float
+    totalWeight: float
+
+class ReturnPlanResponse(BaseModel):
+    success: bool
+    returnPlan: List[ReturnPlanStep]
+    retrievalSteps: List[RetrievalStep]
+    returnManifest: ReturnManifest
+
+
+
+
