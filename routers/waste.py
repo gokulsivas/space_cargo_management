@@ -1,10 +1,11 @@
 import json
 import re
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict
+from typing import List, Dict, Tuple
+import csv
 import polars as pl
 from pydantic import BaseModel
-from schemas import WasteItem, ReturnPlanRequest, CompleteUndockingRequest, Position
+from schemas import ReturnPlanStep, ReturnPlanRequest, CompleteUndockingRequest, Position, RetrievalStep, ReturnItem, ReturnManifest, ReturnPlanResponse, Object3D, Octree
 import os
 
 router = APIRouter(
@@ -18,8 +19,8 @@ def parse_position(position_str: str) -> dict:
     "(x,y,z),(x,y,z)"
     and return a dict with startCoordinates and endCoordinates.
     """
-    # Use regex to extract numbers between the parentheses
-    pattern = r"$([^)]+)$"
+    # Use regex to extract the content inside each pair of parentheses
+    pattern = r"\((.*?)\)"
     matches = re.findall(pattern, position_str)
 
     if len(matches) != 2:
@@ -71,8 +72,10 @@ async def identify_waste():
             # Determine if it looks like a JSON string (starts with {) or our tuple style (starts with ()
             if isinstance(position_value, str):
                 if position_value.strip().startswith("{"):
+                    print("Detected JSON format")
                     # if it's JSON, attempt to load via json.loads
                     try:
+                        print("Parsing JSON")
                         position_dict = json.loads(position_value)
                     except Exception as e:
                         print(f"JSON parsing error: {str(e)}")
@@ -81,6 +84,7 @@ async def identify_waste():
                             "endCoordinates": {"width": 0, "depth": 0, "height": 0}
                         }
                 elif position_value.strip().startswith("("):
+                    print("Detected tuple-like format")
                     # Use our custom parser for tuple-like strings
                     position_dict = parse_position(position_value)
                 else:
@@ -90,6 +94,7 @@ async def identify_waste():
                         "endCoordinates": {"width": 0, "depth": 0, "height": 0}
                     }
             else:
+                print("Position value is not a string")
                 position_dict = {
                     "startCoordinates": {"width": 0, "depth": 0, "height": 0},
                     "endCoordinates": {"width": 0, "depth": 0, "height": 0}
@@ -119,193 +124,89 @@ async def identify_waste():
         print(traceback.format_exc())
         return {"success": False, "wasteItems": []}
 
+def load_imported_items(filename):
+    imported_items = {}
+    if not os.path.exists(filename):
+        return imported_items
+    
+    with open(filename, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            imported_items[row["itemId"]] = float(row.get("mass", 0))
+    
+    return imported_items
+
+def read_waste_data(waste_filename, imported_filename):
+    objects = []
+    imported_items = load_imported_items(imported_filename)
+    weights = {}
+
+    if not os.path.exists(waste_filename):
+        return objects
+    
+    with open(waste_filename, newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            coordinates = parse_position(row.get("position", ""))
+            item_id = row.get("itemId", "")
+            weight = imported_items.get(item_id, 0)  # Store weight separately
+            obj = Object3D(
+                item_id,
+                row.get("name", ""),
+                row.get("containerId", ""),
+                coordinates["startCoordinates"],
+                coordinates["endCoordinates"]
+            )
+            objects.append(obj)
+            weights[item_id] = weight  # Store weight in a dictionary
+
+    return objects, weights
 
 
-@router.post("/return-plan")
+@router.post("/return-plan", response_model=ReturnPlanResponse)
 async def generate_return_plan(request: ReturnPlanRequest):
-    try:
-        # Define file paths
-        waste_file = "waste_items.csv"
-        containers_file = "imported_containers.csv"
-        
-        # Check if waste file exists
-        if not os.path.exists(waste_file) or not os.path.exists(containers_file):
-            return {"success": False, "message": "Required files not found"}
-        
-        # Load waste items and containers
-        waste_df = pl.read_csv(waste_file)
-        containers_df = pl.read_csv(containers_file)
-        
-        if waste_df.is_empty():
-            return {"success": False, "message": "No waste items found"}
-        
-        # Filter waste items for the specified container
-        return_items = waste_df.filter(pl.col("containerId") == request.undockingContainerId).to_dicts()
-        
-        if not return_items:
-            return {"success": False, "message": "No waste items in this container"}
-        
-        # Get container information
-        container_info = containers_df.filter(pl.col("containerId") == request.undockingContainerId)
-        if container_info.is_empty():
-            # Use default values if container info not found
-            container_volume = 0
-            container_weight = 0
-        else:
-            # Calculate container metrics (example calculations)
-            container_volume = float(container_info.select("volume")[0, 0]) if "volume" in container_info.columns else 0
-            container_weight = float(container_info.select("weight")[0, 0]) if "weight" in container_info.columns else 0
-        
-        # Generate return manifest
-        return_manifest = {
-            "undockingContainerId": request.undockingContainerId,
-            "undockingDate": request.undockingDate,
-            "returnItems": [
-                {
-                    "itemId": item["itemId"],
-                    "name": item["name"],
-                    "reason": item["reason"]
-                } for item in return_items
-            ],
-            "totalVolume": container_volume + (len(return_items) * 0.5),  # Example calculation
-            "totalWeight": min(request.maxWeight, container_weight + (len(return_items) * 2))  # Respect maxWeight limit
-        }
-        
-        # Create return plan steps
-        return_plan = []
-        for i, item in enumerate(return_items):
-            step = {
-                "step": i + 1,
-                "itemId": item["itemId"],
-                "itemName": item["name"],
-                "fromContainer": item["containerId"],
-                "toContainer": request.undockingContainerId  # Items go to the undocking container
-            }
-            return_plan.append(step)
-        
-        # Create retrieval steps (more detailed than the example)
-        retrieval_steps = []
-        step_counter = 1
-        
-        for item in return_items:
-            # Step 1: Remove item from its current location
-            retrieval_steps.append({
-                "step": step_counter,
-                "action": "remove",
-                "itemId": item["itemId"],
-                "itemName": item["name"]
-            })
-            step_counter += 1
-            
-            # Step 2: Set aside temporarily
-            retrieval_steps.append({
-                "step": step_counter,
-                "action": "setAside",
-                "itemId": item["itemId"],
-                "itemName": item["name"]
-            })
-            step_counter += 1
-            
-            # Step 3: Retrieve for packaging
-            retrieval_steps.append({
-                "step": step_counter,
-                "action": "retrieve",
-                "itemId": item["itemId"],
-                "itemName": item["name"]
-            })
-            step_counter += 1
-        
-        # Store the return plan for future reference (optional)
-        store_return_plan(request.undockingContainerId, return_manifest, return_plan, retrieval_steps)
-        
-        return {
-            "success": True,
-            "returnPlan": return_plan,
-            "retrievalSteps": retrieval_steps,
-            "returnManifest": return_manifest
-        }
-        
-    except Exception as e:
-        print(f"Error in generate_return_plan endpoint: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
-        return {"success": False, "message": "An error occurred while generating the return plan"}
+    waste_objects, weights = read_waste_data("waste_items.csv", "imported_items.csv")
+    
+    return_plan = []
+    retrieval_steps = []
+    return_items = []
+    total_volume = 0
+    total_weight = 0
+    step_counter = 1
+    
+    while waste_objects:
+        front_obj = min(waste_objects, key=lambda obj: obj.front_z, default=None)
+        front_weight = weights.get(front_obj.itemId, 0) if front_obj else 0  # Get weight from dictionary
 
+        if front_obj and total_weight + front_weight <= request.maxWeight:
+            retrieval_steps.append(RetrievalStep(step=step_counter, action="remove", itemId=front_obj.itemId, itemName=front_obj.name))
+            return_plan.append(ReturnPlanStep(
+                step=step_counter,
+                itemId=front_obj.itemId,
+                itemName=front_obj.name,
+                fromContainer=request.undockingContainerId,
+                toContainer="return"
+            ))
+            return_items.append(ReturnItem(itemId=front_obj.itemId, name=front_obj.name, reason="Out of use"))
+            total_weight += front_weight
+            waste_objects.remove(front_obj)
+            step_counter += 1
+    
+    manifest = ReturnManifest(
+        undockingContainerId=request.undockingContainerId,
+        undockingDate=request.undockingDate,
+        returnItems=return_items,
+        totalVolume=total_volume,
+        totalWeight=total_weight
+    )
+    
+    return ReturnPlanResponse(
+        success=True,
+        returnPlan=return_plan,
+        retrievalSteps=retrieval_steps,
+        returnManifest=manifest
+    )
 
-# Helper function to store return plans
-def store_return_plan(container_id, return_manifest, return_plan, retrieval_steps):
-    try:
-        plan_file = "return_plans.csv"
-        
-        # Create a dictionary to represent the plan
-        plan_entry = {
-            "containerId": container_id,
-            "undockingDate": return_manifest["undockingDate"],
-            "planDetails": {
-                "manifest": return_manifest,
-                "plan": return_plan,
-                "steps": retrieval_steps
-            }
-        }
-        
-        # Convert to JSON for storage
-        import json
-        plan_json = json.dumps(plan_entry)
-        
-        # Store in CSV
-        if not os.path.exists(plan_file):
-            # Create file with headers
-            plans_df = pl.DataFrame({
-                "containerId": [container_id],
-                "undockingDate": [return_manifest["undockingDate"]],
-                "planDetails": [plan_json]
-            })
-        else:
-            # Read existing file
-            try:
-                plans_df = pl.read_csv(plan_file)
-                
-                # Check if plan for this container already exists
-                existing_plan = plans_df.filter(pl.col("containerId") == container_id)
-                
-                if not existing_plan.is_empty():
-                    # Update existing plan
-                    plans_df = plans_df.with_columns(
-                        pl.when(pl.col("containerId") == container_id)
-                        .then(pl.lit(plan_json))
-                        .otherwise(pl.col("planDetails"))
-                        .alias("planDetails")
-                    )
-                    
-                    plans_df = plans_df.with_columns(
-                        pl.when(pl.col("containerId") == container_id)
-                        .then(pl.lit(return_manifest["undockingDate"]))
-                        .otherwise(pl.col("undockingDate"))
-                        .alias("undockingDate")
-                    )
-                else:
-                    # Add new plan
-                    new_plan = pl.DataFrame({
-                        "containerId": [container_id],
-                        "undockingDate": [return_manifest["undockingDate"]],
-                        "planDetails": [plan_json]
-                    })
-                    plans_df = pl.concat([plans_df, new_plan])
-                    
-            except Exception as e:
-                # Create new file if reading fails
-                plans_df = pl.DataFrame({
-                    "containerId": [container_id],
-                    "undockingDate": [return_manifest["undockingDate"]],
-                    "planDetails": [plan_json]
-                })
-        
-        # Save the plans
-        plans_df.write_csv(plan_file)
-        print(f"Stored return plan for container {container_id}")
-        
-    except Exception as e:
-        print(f"Error storing return plan: {str(e)}")
 
 
 @router.post("/complete-undocking")
