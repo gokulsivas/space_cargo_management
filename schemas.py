@@ -151,12 +151,37 @@ class CargoPlacementSystem:
 
     def add_containers(self, containers: List[dict]):
         """Store containers and initialize Octrees using zone."""
-        self.containers_df = pl.DataFrame(containers)
+        print("\n=== Initializing Containers ===")
+        
+        try:
+            self.containers_df = pl.DataFrame(containers)
+            print(f"Added {len(self.containers_df)} containers")
+            print(f"Container columns: {self.containers_df.columns}")
+        
+        # Initialize octrees using the zone
+            for container in self.containers_df.iter_rows(named=True):
+                try:
+                    zone = str(container["zone"]).strip()
+                    print(f"\nProcessing container for zone: {zone}")
+                    print(f"Container dimensions: {container['width']}x{container['depth']}x{container['height']}")
+                    
+                    self.octrees[zone] = Octree(container)
+                    print(f"Successfully created octree for zone {zone}")
+                    
+                except Exception as e:
+                    print(f"Error creating octree for zone {zone}: {str(e)}")
+                    continue
+            
+            print(f"\nTotal octrees created: {len(self.octrees)}")
+            print(f"Zones with octrees: {list(self.octrees.keys())}")
+            
+        except Exception as e:
+            print(f"Error in add_containers: {str(e)}")
 
-        # Initialize octrees using the zone instead of containerId
-        for container in self.containers_df.iter_rows(named=True):
-            zone = container["zone"].strip()  # Ensure no leading/trailing spaces
-            self.octrees[zone] = Octree(container)  # Create and store the octree
+            # Initialize octrees using the zone instead of containerId
+            for container in self.containers_df.iter_rows(named=True):
+                zone = container["zone"].strip()  # Ensure no leading/trailing spaces
+                self.octrees[zone] = Octree(container)  # Create and store the octree
 
     def load_from_csv(self, items_path: str, containers_path: str):
         self.loading_log.append("Loading CSV data...")
@@ -176,54 +201,91 @@ class CargoPlacementSystem:
 
     def optimize_placement(self):
         """Places items using Octree, now indexed by zone instead of containerId."""
-        placements_df = pl.DataFrame()
-        rearrangements_df = pl.DataFrame()
-
+        print("\n=== Starting Optimization Process ===")
+        
+        # Debug initial state
+        print(f"Items DataFrame Shape: {self.items_df.shape if not self.items_df.is_empty() else 'Empty'}")
+        print(f"Containers DataFrame Shape: {self.containers_df.shape if not self.containers_df.is_empty() else 'Empty'}")
+        print(f"Number of Octrees: {len(self.octrees)}")
+        
+        # Validate data frames
         if self.items_df.is_empty() or self.containers_df.is_empty():
             print("Error: No items or containers available.")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
-        # Create default placement structure if no items can be placed
-        if "itemId" in self.items_df.columns:
-            default_placements = {
-                "itemId": [],
-                "zone": [],
-                "start_x": [],
-                "start_y": [],
-                "start_z": [],
-                "end_x": [],
-                "end_y": [],
-                "end_z": []
-            }
-            placements_df = pl.DataFrame(default_placements)
+        # Validate required columns
+        required_item_cols = ["itemId", "width", "depth", "height", "priority", "preferredZone"]
+        missing_cols = [col for col in required_item_cols if col not in self.items_df.columns]
+        if missing_cols:
+            print(f"Error: Missing required columns in items_df: {missing_cols}")
+            return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
+        # Create default placement structure
+        default_placements = {
+            "itemId": [],
+            "zone": [],
+            "start_x": [],
+            "start_y": [],
+            "start_z": [],
+            "end_x": [],
+            "end_y": [],
+            "end_z": []
+        }
+        placements_df = pl.DataFrame(default_placements)
+
+        # Sort items by priority
+        print("\n=== Processing Items ===")
         sorted_items_df = self.items_df.sort("priority", descending=True)
+        print(f"Total items to process: {len(sorted_items_df)}")
 
+        # Process each item
         for item_row in sorted_items_df.iter_rows(named=True):
-            preferred_zone = item_row["preferredZone"].strip()  # Ensure no leading/trailing spaces
+            print(f"\nProcessing item ID: {item_row['itemId']}")
+            
+            # Validate item data
+            try:
+                preferred_zone = str(item_row["preferredZone"]).strip()
+                print(f"Preferred zone: {preferred_zone}")
+                
+                # Debug octrees
+                print(f"Available zones: {list(self.octrees.keys())}")
+                
+                # Ensure octrees are properly initialized
+                self.octrees = {str(zone).strip(): octree for zone, octree in self.octrees.items()}
+                
+                octree = self.octrees.get(preferred_zone)
+                if octree is None:
+                    print(f"Warning: No octree found for zone '{preferred_zone}'")
+                    continue
 
-            # Ensure stored octrees also have trimmed keys
-            self.octrees = {zone.strip(): octree for zone, octree in self.octrees.items()}  
+                # Validate item dimensions
+                if not all(item_row[dim] > 0 for dim in ['width', 'depth', 'height']):
+                    print(f"Warning: Invalid dimensions for item {item_row['itemId']}")
+                    continue
 
-            octree = self.octrees.get(preferred_zone)  # Lookup with trimmed zone
+                print("Attempting placement...")
+                placement_position = octree.place_item(item_row)
+                print(f"Placement result: {'Success' if placement_position is not None else 'Failed'}")
 
-            if octree is None:
-                print(f"Warning: No octree found for zone '{preferred_zone}'")
+                if placement_position is not None:
+                    placement_record = pl.DataFrame({
+                        "itemId": [item_row["itemId"]],
+                        "zone": [preferred_zone],
+                    }).hstack(placement_position)
+
+                    placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
+                    print(f"Successfully placed item {item_row['itemId']} in zone {preferred_zone}")
+                else:
+                    print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
+
+            except Exception as e:
+                print(f"Error processing item {item_row['itemId']}: {str(e)}")
                 continue
 
-            placement_position = octree.place_item(item_row)
-
-            if placement_position is not None:
-                placement_record = pl.DataFrame({
-                    "itemId": [item_row["itemId"]],
-                    "zone": [preferred_zone],  # Store zone instead of containerId
-                }).hstack(placement_position)
-
-                placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
-            else:
-                print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
-
-        # Default empty rearrangements dataframe
+        # Create final result
+        print("\n=== Finalizing Results ===")
+        print(f"Total successful placements: {len(placements_df)}")
+        
         default_rearrangements = {
             "step": [],
             "action": [],
@@ -233,11 +295,14 @@ class CargoPlacementSystem:
         }
         rearrangements_df = pl.DataFrame(default_rearrangements)
 
-        return pl.DataFrame({
+        result = pl.DataFrame({
             "success": [True],
             "placements": [placements_df],
             "rearrangements": [rearrangements_df]
         })
+        
+        print("=== Optimization Complete ===\n")
+        return result
 
 
 
