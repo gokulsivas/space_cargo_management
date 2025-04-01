@@ -145,7 +145,6 @@ async def import_items(file: UploadFile = File(...)):
             # Create imported_items.csv file
             items_df = pl.DataFrame(items)
             items_df.write_csv("imported_items.csv")
-            items_df.write_csv("dupe_imported_items.csv")
             
         except Exception as e:
             log_action("Import Items Failed", f"Error: {str(e)}")
@@ -228,52 +227,105 @@ async def import_containers(file: UploadFile = File(...)):
 @router.get("/export/arrangement")
 async def export_arrangement():
     try:
-        result = cargo_system.optimize_placement()
-        log_action("Optimize Placement", "Cargo placement optimization executed.")
-
-        # Ensure 'placements' exists and is a valid DataFrame
-        placements = None
-        if isinstance(result, pl.DataFrame) and "placements" in result.columns:
-            placements = result["placements"][0] if not result["placements"].is_null()[0] else None
-
-        if placements is None or placements.is_empty():
-            log_action("Export Failed", "No placements available for export.")
-            raise HTTPException(status_code=404, detail="No placements available.")
-
+        print("\n=== Starting Export Process ===")
+        
+        # Verify data is loaded
+        if cargo_system.items_df.is_empty():
+            print("Error: No items loaded")
+            raise HTTPException(status_code=400, detail="No items loaded")
+            
+        if cargo_system.containers_df.is_empty():
+            print("Error: No containers loaded")
+            raise HTTPException(status_code=400, detail="No containers loaded")
+            
+        total_items = len(cargo_system.items_df)
+        print(f"Total items to process: {total_items}")
+        
+        # Create direct placements without octree
+        placements = []
+        current_position = {"x": 0, "y": 0, "z": 0}
+        
+        # Process each item and assign to its preferred zone
+        for item in cargo_system.items_df.iter_rows(named=True):
+            try:
+                # Get container dimensions for the preferred zone
+                container = cargo_system.containers_df.filter(
+                    pl.col("zone") == item["preferredZone"]
+                ).row(0, named=True)
+                
+                # Calculate item placement
+                placement = {
+                    "itemId": item["itemId"],
+                    "zone": item["preferredZone"],
+                    "start_x": current_position["x"],
+                    "start_y": current_position["y"],
+                    "start_z": current_position["z"],
+                    "end_x": current_position["x"] + item["width"],
+                    "end_y": current_position["y"] + item["depth"],
+                    "end_z": current_position["z"] + item["height"]
+                }
+                
+                # Update position for next item (simple stacking)
+                if current_position["x"] + item["width"] * 2 <= float(container["width"]):
+                    current_position["x"] += item["width"]
+                else:
+                    current_position["x"] = 0
+                    if current_position["y"] + item["depth"] * 2 <= float(container["depth"]):
+                        current_position["y"] += item["depth"]
+                    else:
+                        current_position["y"] = 0
+                        current_position["z"] += item["height"]
+                
+                placements.append(placement)
+                
+            except Exception as e:
+                print(f"Error processing item {item['itemId']}: {str(e)}")
+                continue
+        
         # Create and save the cargo_arrangement.csv file
         arrangement_csv_path = "cargo_arrangement.csv"
+        
         with open(arrangement_csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(["itemId", "zone", "coordinates"])
-
-            for placement in placements.iter_rows(named=True):
+            
+            for placement in placements:
                 writer.writerow([
                     placement["itemId"],
                     placement["zone"],
                     f"({placement['start_x']},{placement['start_y']},{placement['start_z']}),"
                     f"({placement['end_x']},{placement['end_y']},{placement['end_z']})"
                 ])
-
-        # Prepare the response CSV with the same columns
+        
+        print(f"Wrote {len(placements)} placements to {arrangement_csv_path}")
+        
+        # Prepare the response
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["itemId", "zone", "coordinates"])
-
-        for placement in placements.iter_rows(named=True):
-            writer.writerow([
-                placement["itemId"],
-                placement["zone"],
-                f"({placement['start_x']},{placement['start_y']},{placement['start_z']}),"
-                f"({placement['end_x']},{placement['end_y']},{placement['end_z']})"
-            ])
-
+        
+        with open(arrangement_csv_path, 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  # Skip header
+            for row in reader:
+                writer.writerow(row)
+                
         output.seek(0)
-        log_action("Export Arrangement", "Exported cargo arrangement successfully.")
+        
+        print("=== Export Process Complete ===")
+        log_action("Export Arrangement", f"Exported {len(placements)} placements successfully")
 
-        return Response(output.getvalue(), media_type="text/csv", headers={
-            "Content-Disposition": "attachment; filename=arrangement.csv"
-        })
+        return Response(
+            output.getvalue(), 
+            media_type="text/csv", 
+            headers={
+                "Content-Disposition": "attachment; filename=arrangement.csv"
+            }
+        )
+        
     except Exception as e:
-        log_action("Export Failed", f"Error exporting arrangement: {str(e)}")
         print(f"Export Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error exporting arrangement: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        log_action("Export Failed", f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
