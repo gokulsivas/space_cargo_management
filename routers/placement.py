@@ -1,9 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from schemas import CargoPlacementSystem, PlacementRequest, PlacementResponse  # ✅ Import PlacementResponse
+from schemas import CargoPlacementSystem, PlacementRequest, PlacementResponse
+from algos.placement_algo import AdvancedCargoPlacement
 import polars as pl
-
-# Create CargoPlacementSystem instance
-cargo_system = CargoPlacementSystem()
 
 router = APIRouter(
     prefix="/api/placement",
@@ -15,107 +13,54 @@ async def process_placement(request: PlacementRequest) -> PlacementResponse:
     if not request.items or not request.containers:
         raise HTTPException(status_code=400, detail="Items and containers must be provided.")
 
-    # Add items and containers
-    cargo_system.add_items([item.dict() for item in request.items])
-    cargo_system.add_containers([container.dict() for container in request.containers])
+    try:
+        print(f"Processing placement request with {len(request.items)} items and {len(request.containers)} containers")
+        placements = []
+        rearrangements = []
 
-    # Optimize placement
-    placement_result = cargo_system.optimize_placement()
+        # Process each container separately
+        for container in request.containers:
+            print(f"Processing container {container.containerId} for zone {container.zone}")
+            
+            # Initialize advanced placement algorithm for this container
+            cargo_placer = AdvancedCargoPlacement({
+                "width": container.width,
+                "depth": container.depth,
+                "height": container.height
+            })
 
-    # Debugging logs
-    print("Placement Result:", placement_result)
+            # Get items assigned to this container's zone
+            container_items = [
+                item.dict() 
+                for item in request.items 
+                if item.preferredZone == container.zone
+            ]
+            
+            print(f"Found {len(container_items)} items for zone {container.zone}")
 
-    # Extract success value
-    success = False
-    if "success" in placement_result.columns and not placement_result["success"].is_empty():
-        success = placement_result["success"].item(0)
+            if not container_items:
+                continue
 
-    # Create a mapping from zone to containerId
-    container_map = {container.zone.strip(): container.containerId for container in request.containers}
-    
-    # Convert placements DataFrame to list of ItemPlacement objects with the new coordinate format
-    placements = []
-    if "placements" in placement_result.columns and placement_result["placements"].item(0) is not None:
-        placements_df = placement_result["placements"].item(0)
-        if not placements_df.is_empty():
-            for row in placements_df.iter_rows(named=True):
-                # Get containerId from zone
-                container_id = container_map.get(row["zone"], "unknown")
-                
-                # Create position dict with new coordinate format
-                position = {
-                    "startCoordinates": {
-                        "width": float(row["start_x"]),
-                        "depth": float(row["start_y"]),
-                        "height": float(row["start_z"])
-                    },
-                    "endCoordinates": {
-                        "width": float(row["end_x"]),
-                        "depth": float(row["end_y"]),
-                        "height": float(row["end_z"])
-                    }
-                }
-                
-                # Create ItemPlacement object and add to list
-                placements.append({
-                    "itemId": row["itemId"],
-                    "containerId": container_id,
-                    "position": position
-                })
+            # Find optimal placement for items in this container
+            container_placements = cargo_placer.find_optimal_placement(container_items)
+            print(f"Generated {len(container_placements)} placements for container {container.containerId}")
 
-    # Convert rearrangements DataFrame to list of RearrangementStep objects with the new coordinate format
-    rearrangements = []
-    if "rearrangements" in placement_result.columns and placement_result["rearrangements"].item(0) is not None:
-        rearrangements_df = placement_result["rearrangements"].item(0)
-        if not rearrangements_df.is_empty():
-            for row in rearrangements_df.iter_rows(named=True):
-                # Create fromPosition dict with new coordinate format
-                from_position = {
-                    "startCoordinates": {
-                        "width": float(row.get("from_start_x", 0)),
-                        "depth": float(row.get("from_start_y", 0)),
-                        "height": float(row.get("from_start_z", 0))
-                    },
-                    "endCoordinates": {
-                        "width": float(row.get("from_end_x", 0)),
-                        "depth": float(row.get("from_end_y", 0)),
-                        "height": float(row.get("from_end_z", 0))
-                    }
-                }
-                
-                # Create toPosition dict with new coordinate format if it exists
-                to_position = None
-                if "to_start_x" in row:
-                    to_position = {
-                        "startCoordinates": {
-                            "width": float(row["to_start_x"]),
-                            "depth": float(row["to_start_y"]),
-                            "height": float(row["to_start_z"])
-                        },
-                        "endCoordinates": {
-                            "width": float(row["to_end_x"]),
-                            "depth": float(row["to_end_y"]),
-                            "height": float(row["to_end_z"])
-                        }
-                    }
-                
-                # Default to same container if not specified
-                to_container = row.get("toContainer", row.get("fromContainer", ""))
-                
-                # Create RearrangementStep object and add to list
-                rearrangements.append({
-                    "step": row.get("step", 0),
-                    "action": row.get("action", "move"),
-                    "itemId": row["itemId"],
-                    "fromContainer": row.get("fromContainer", ""),
-                    "fromPosition": from_position,
-                    "toContainer": to_container,
-                    "toPosition": to_position
-                })
+            # Add container ID to placements
+            for placement in container_placements:
+                placement["containerId"] = container.containerId
+                placements.append(placement)
 
-    # Create and return the PlacementResponse
-    return PlacementResponse(
-        success=success,
-        placements=placements,
-        rearrangements=rearrangements
-    )
+        success = len(placements) > 0
+        print(f"Placement complete. Success: {success}, Total placements: {len(placements)}")
+
+        return PlacementResponse(
+            success=success,
+            placements=placements,
+            rearrangements=rearrangements
+        )
+
+    except Exception as e:
+        print(f"Error in placement processing: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
