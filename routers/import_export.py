@@ -145,6 +145,7 @@ async def import_items(file: UploadFile = File(...)):
             # Create imported_items.csv file
             items_df = pl.DataFrame(items)
             items_df.write_csv("imported_items.csv")
+            items_df.write_csv("dupe_imported_items.csv")
             
         except Exception as e:
             log_action("Import Items Failed", f"Error: {str(e)}")
