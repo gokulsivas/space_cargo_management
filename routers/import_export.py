@@ -175,7 +175,7 @@ async def import_containers(file: UploadFile = File(...)):
 
     # Validate required columns
     reader = csv.DictReader(io.StringIO(decoded_contents))
-    required_columns = {"containerId", "zone", "width", "depth", "height"}
+    required_columns = {"zone", "containerId", "width", "depth", "height"}
 
     if not required_columns.issubset(set(reader.fieldnames or [])):
         missing_columns = required_columns - set(reader.fieldnames or [])
@@ -190,8 +190,8 @@ async def import_containers(file: UploadFile = File(...)):
     for row_number, row in enumerate(containers_json, start=1):
         try:
             container = {
-                "containerId": row["containerId"],
                 "zone": row["zone"],
+                "containerId": row["containerId"],
                 "width": float(row["width"]),
                 "depth": float(row["depth"]),
                 "height": float(row["height"])
