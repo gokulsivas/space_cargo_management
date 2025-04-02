@@ -7,9 +7,9 @@ import os
 
 class Octant:
     """Represents a node (octant) in the Octree."""
-    def __init__(self, x, y, z, width, depth, height, level=0, max_level=3):
+    def __init__(self, x, y, z, width_cm, depth_cm, height_cm, level=0, max_level=3):
         self.x, self.y, self.z = x, y, z
-        self.width, self.depth, self.height = width, depth, height
+        self.width_cm, self.depth_cm, self.height_cm = width_cm, depth_cm, height_cm
         self.level = level
         self.max_level = max_level
         self.occupied = False
@@ -19,7 +19,7 @@ class Octant:
         """Splits the octant into 8 smaller octants if needed."""
         if self.level >= self.max_level:
             return
-        half_w, half_d, half_h = self.width / 2, self.depth / 2, self.height / 2
+        half_w, half_d, half_h = self.width_cm / 2, self.depth_cm / 2, self.height_cm / 2
         self.children = [
             Octant(self.x, self.y, self.z, half_w, half_d, half_h, self.level + 1),
             Octant(self.x + half_w, self.y, self.z, half_w, half_d, half_h, self.level + 1),
@@ -35,9 +35,9 @@ class Octant:
         """Checks if an item can fit into this octant."""
         return (
             not self.occupied and 
-            item_row["width"] <= self.width and 
-            item_row["depth"] <= self.depth and 
-            item_row["height"] <= self.height
+            item_row["width_cm"] <= self.width_cm and 
+            item_row["depth_cm"] <= self.depth_cm and 
+            item_row["height_cm"] <= self.height_cm
         )
 
     def place_item(self, item_row):
@@ -46,10 +46,10 @@ class Octant:
             self.occupied = True
             return pl.DataFrame({
                 "start_x": [self.x], "start_y": [self.y], "start_z": [self.z],
-                "end_x": [self.x + item_row["width"]],
-                "end_y": [self.y + item_row["depth"]],
-                "end_z": [self.z + item_row["height"]]
-            })  # Returns a DataFrame with placement coordinates
+                "end_x": [self.x + item_row["width_cm"]],
+                "end_y": [self.y + item_row["depth_cm"]],
+                "end_z": [self.z + item_row["height_cm"]]
+            })
 
         if not self.children:
             self.subdivide()
@@ -62,63 +62,66 @@ class Octant:
         return None  # No space found
 
 class Object3D:
-    def __init__(self, itemId, name, containerId, start, end):
-        self.itemId = itemId
+    def __init__(self, item_id, name, container_id, start, end):
+        self.item_id = item_id
         self.name = name
-        self.containerId = containerId
+        self.container_id = container_id
         self.start = start
         self.end = end
-        self.front_z = min(start['height'], end['height'])
+        self.front_z = min(start['height_cm'], end['height_cm'])
 
 class Octree:
     """Octree structure for managing storage placement."""
     def __init__(self, container_row):
         self.root = Octant(
-            0, 0, 0, container_row["width"], container_row["depth"], container_row["height"]
+            0, 0, 0, container_row["width_cm"], container_row["depth_cm"], container_row["height_cm"]
         )
 
     def place_item(self, item_row):
         """Finds the best space for an item and places it."""
-        return self.root.place_item(item_row)  # Returns DataFrame if placed, None otherwise
+        return self.root.place_item(item_row)
 
 class Coordinates(BaseModel):
-    width: float
-    depth: float
-    height: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
 
 class Position(BaseModel):
     startCoordinates: Coordinates
     endCoordinates: Coordinates
 
 class ItemPlacement(BaseModel):
-    itemId: int
-    containerId: str
+    item_id: int
+    container_id: str
     position: Position
 
 class RearrangementStep(BaseModel):
     step: int
     action: str  # "move", "remove", "place"
-    itemId: int
-    fromContainer: str
-    fromPosition: Position
-    toContainer: Optional[str] = None
-    toPosition: Optional[Position] = None
+    item_id: int
+    from_container: str
+    from_position: Position
+    to_container: Optional[str] = None
+    to_position: Optional[Position] = None
+
 class Item(BaseModel):
-    itemId: int
+    item_id: int
     name: str
-    width: float
-    depth: float
-    height: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
     priority: int
-    expiryDate: Optional[str]  # ISO format date as a string
-    usageLimit: int
-    preferredZone: str
+    expiry_date: Optional[str]
+    usage_limit: int
+    preferred_zone: str
+
 class Container(BaseModel):
+    container_id: str
     zone: str
-    containerId: str
-    width: float
-    depth: float
-    height: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
+
 class PlacementRequest(BaseModel):
     items: List[Item]
     containers: List[Container]
@@ -129,21 +132,18 @@ class PlacementResponse(BaseModel):
     rearrangements: List[RearrangementStep]
 
 class Item_for_search(BaseModel):
-    itemId: int
+    item_id: int
     name: str
-    containerId: str  # Where the item is kept
-    zone: str  # Zone of the container
+    container_id: str
+    zone: str
     position: Position
 
-# ---------------- Cargo Placement System ----------------
-
-# Modified CargoPlacementSystem class
 class CargoPlacementSystem:
     def __init__(self):
         self.items_df = pl.DataFrame()
         self.containers_df = pl.DataFrame()
-        self.octrees = {}  # Store octrees separately in a dictionary
-        self.loading_log = []  # Added loading_log attribute
+        self.octrees = {}
+        self.loading_log = []
 
     def add_items(self, items: List[dict]):
         """Store items in a Polars DataFrame."""
@@ -158,12 +158,11 @@ class CargoPlacementSystem:
             print(f"Added {len(self.containers_df)} containers")
             print(f"Container columns: {self.containers_df.columns}")
         
-        # Initialize octrees using the zone
             for container in self.containers_df.iter_rows(named=True):
                 try:
                     zone = str(container["zone"]).strip()
                     print(f"\nProcessing container for zone: {zone}")
-                    print(f"Container dimensions: {container['width']}x{container['depth']}x{container['height']}")
+                    print(f"Container dimensions: {container['width_cm']}x{container['depth_cm']}x{container['height_cm']}")
                     
                     self.octrees[zone] = Octree(container)
                     print(f"Successfully created octree for zone {zone}")
@@ -177,11 +176,6 @@ class CargoPlacementSystem:
             
         except Exception as e:
             print(f"Error in add_containers: {str(e)}")
-
-            # Initialize octrees using the zone instead of containerId
-            for container in self.containers_df.iter_rows(named=True):
-                zone = container["zone"].strip()  # Ensure no leading/trailing spaces
-                self.octrees[zone] = Octree(container)  # Create and store the octree
 
     def load_from_csv(self, items_path: str, containers_path: str):
         self.loading_log.append("Loading CSV data...")
@@ -200,29 +194,25 @@ class CargoPlacementSystem:
             self.loading_log.append(traceback.format_exc())
 
     def optimize_placement(self):
-        """Places items using Octree, now indexed by zone instead of containerId."""
+        """Places items using Octree, now indexed by zone."""
         print("\n=== Starting Optimization Process ===")
         
-        # Debug initial state
         print(f"Items DataFrame Shape: {self.items_df.shape if not self.items_df.is_empty() else 'Empty'}")
         print(f"Containers DataFrame Shape: {self.containers_df.shape if not self.containers_df.is_empty() else 'Empty'}")
         print(f"Number of Octrees: {len(self.octrees)}")
         
-        # Validate data frames
         if self.items_df.is_empty() or self.containers_df.is_empty():
             print("Error: No items or containers available.")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
-        # Validate required columns
-        required_item_cols = ["itemId", "width", "depth", "height", "priority", "preferredZone"]
+        required_item_cols = ["item_id", "width_cm", "depth_cm", "height_cm", "priority", "preferred_zone"]
         missing_cols = [col for col in required_item_cols if col not in self.items_df.columns]
         if missing_cols:
             print(f"Error: Missing required columns in items_df: {missing_cols}")
             return pl.DataFrame({"success": [False], "placements": [None], "rearrangements": [None]})
 
-        # Create default placement structure
         default_placements = {
-            "itemId": [],
+            "item_id": [],
             "zone": [],
             "start_x": [],
             "start_y": [],
@@ -233,24 +223,19 @@ class CargoPlacementSystem:
         }
         placements_df = pl.DataFrame(default_placements)
 
-        # Sort items by priority
         print("\n=== Processing Items ===")
         sorted_items_df = self.items_df.sort("priority", descending=True)
         print(f"Total items to process: {len(sorted_items_df)}")
 
-        # Process each item
         for item_row in sorted_items_df.iter_rows(named=True):
-            print(f"\nProcessing item ID: {item_row['itemId']}")
+            print(f"\nProcessing item ID: {item_row['item_id']}")
             
-            # Validate item data
             try:
-                preferred_zone = str(item_row["preferredZone"]).strip()
+                preferred_zone = str(item_row["preferred_zone"]).strip()
                 print(f"Preferred zone: {preferred_zone}")
                 
-                # Debug octrees
                 print(f"Available zones: {list(self.octrees.keys())}")
                 
-                # Ensure octrees are properly initialized
                 self.octrees = {str(zone).strip(): octree for zone, octree in self.octrees.items()}
                 
                 octree = self.octrees.get(preferred_zone)
@@ -258,9 +243,8 @@ class CargoPlacementSystem:
                     print(f"Warning: No octree found for zone '{preferred_zone}'")
                     continue
 
-                # Validate item dimensions
-                if not all(item_row[dim] > 0 for dim in ['width', 'depth', 'height']):
-                    print(f"Warning: Invalid dimensions for item {item_row['itemId']}")
+                if not all(item_row[dim] > 0 for dim in ['width_cm', 'depth_cm', 'height_cm']):
+                    print(f"Warning: Invalid dimensions for item {item_row['item_id']}")
                     continue
 
                 print("Attempting placement...")
@@ -269,29 +253,28 @@ class CargoPlacementSystem:
 
                 if placement_position is not None:
                     placement_record = pl.DataFrame({
-                        "itemId": [item_row["itemId"]],
+                        "item_id": [item_row["item_id"]],
                         "zone": [preferred_zone],
                     }).hstack(placement_position)
 
                     placements_df = placements_df.vstack(placement_record) if not placements_df.is_empty() else placement_record
-                    print(f"Successfully placed item {item_row['itemId']} in zone {preferred_zone}")
+                    print(f"Successfully placed item {item_row['item_id']} in zone {preferred_zone}")
                 else:
-                    print(f"Failed to place item {item_row['itemId']} in zone {preferred_zone}")
+                    print(f"Failed to place item {item_row['item_id']} in zone {preferred_zone}")
 
             except Exception as e:
-                print(f"Error processing item {item_row['itemId']}: {str(e)}")
+                print(f"Error processing item {item_row['item_id']}: {str(e)}")
                 continue
 
-        # Create final result
         print("\n=== Finalizing Results ===")
         print(f"Total successful placements: {len(placements_df)}")
         
         default_rearrangements = {
             "step": [],
             "action": [],
-            "itemId": [],
-            "fromContainer": [],
-            "toContainer": []
+            "item_id": [],
+            "from_container": [],
+            "to_container": []
         }
         rearrangements_df = pl.DataFrame(default_rearrangements)
 
@@ -304,156 +287,135 @@ class CargoPlacementSystem:
         print("=== Optimization Complete ===\n")
         return result
 
-
-
-# ---------------- Cargo Classification System ----------------
 class CargoClassificationSystem:
     def __init__(self):
         self.items_df = pl.DataFrame()
         self.containers_df = pl.DataFrame()
-        self.octrees = {}  # Store octrees separately in a dictionary
+        self.octrees = {}
         self.loading_log = []
 
     def add_classified_items(self, items: List[dict]):
-        """Add classified items to the system using Polars DataFrame."""
         if not items:
             return
         new_df = pl.DataFrame(items)
         self.items_df = self.items_df.vstack(new_df) if not self.items_df.is_empty() else new_df
 
-
-
 class TimeSimulationRequest(BaseModel):
-    numOfDays: Optional[int] = None
-    toTimestamp: Optional[str] = None
-    itemsToBeUsedPerDay: List[Dict[str, str]]
+    num_of_days: Optional[int] = None
+    to_timestamp: Optional[str] = None
+    items_to_be_used_per_day: List[Dict[str, str]]
 
-
-
-# 🚀 **Define Pydantic Model for Item Validation**
 class ItemModel(BaseModel):
-    itemId: int
+    item_id: int
     name: str
-    width: float
-    depth: float
-    height: float
-    mass: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
+    mass_kg: float
     priority: int
-    expiryDate: Optional[date] = None  # Optional since expiry can be null
-    usageLimit: int
-    preferredZone: str
+    expiry_date: Optional[date] = None
+    usage_limit: int
+    preferred_zone: str
 
-# 🚀 **Define Pydantic Model for Container Validation**
 class ContainerModel(BaseModel):
     zone: str
-    containerId: int
-    width: float
-    depth: float
-    height: float
+    container_id: int
+    width_cm: float
+    depth_cm: float
+    height_cm: float
 
 class ImportItemsResponse(BaseModel):
     success: bool
-    itemsImported: int
+    items_imported: int
     errors: Optional[List[dict]] = []
     message: str
 
 class ImportContainersResponse(BaseModel):
     success: bool
-    containersImported: int
+    containers_imported: int
     errors: Optional[List[dict]] = []
     message: str
 
 class CargoArrangementExport(BaseModel):
-    """Schema for exporting cargo arrangement as CSV."""
-    itemId: int
-    containerId: str
+    item_id: int
+    container_id: str
     position: Coordinates
 
 class RetrieveItemRequest(BaseModel):
-    itemId: int = Field(..., description="Unique identifier for the item to retrieve")
-    userId: str = Field(..., description="ID of the user retrieving the item")
+    item_id: int = Field(..., description="Unique identifier for the item to retrieve")
+    user_id: str = Field(..., description="ID of the user retrieving the item")
     timestamp: Optional[str] = Field(None, description="Timestamp of retrieval (ISO format)")
 
 class RetrievalStep(BaseModel):
     step: int
     action: str
-    itemId: int
-    itemName: str
+    item_id: int
+    item_name: str
 
 class SearchResponse(BaseModel):
     success: bool
     found: bool
     item: Optional[Item_for_search] = None
-    retrievalSteps: List[RetrievalStep] = []
+    retrieval_steps: List[RetrievalStep] = []
 
 class PlaceItemRequest(BaseModel):
-    itemId: int = Field(..., description="Unique identifier for the item")
-    userId: str = Field(..., description="ID of the user placing the item")
+    item_id: int = Field(..., description="Unique identifier for the item")
+    user_id: str = Field(..., description="ID of the user placing the item")
     timestamp: Optional[str] = Field(None, description="Timestamp of placement (ISO format)")
-    containerId: str = Field(..., description="Container where the item is kept")
+    container_id: str = Field(..., description="Container where the item is kept")
     position: Position = Field(..., description="Position coordinates of the item")
 
 class PlaceItemResponse(BaseModel):
     success: bool
 
 class ReturnPlanRequest(BaseModel):
-    undockingContainerId: str
-    undockingDate: str
-    maxWeight: float
+    undocking_container_id: str
+    undocking_date: str
+    max_weight: float
 
-# Complete Undocking
 class CompleteUndockingRequest(BaseModel):
-    undockingContainerId: str
+    undocking_container_id: str
     timestamp: str
 
 class WasteItem(BaseModel):
-    itemId: int
+    item_id: int
     name: str
     reason: str
-    containerId: str
+    container_id: str
     position: Position
 
 class WasteItemResponse(BaseModel):
     success: bool
-    wasteItems: List[WasteItem] = []
+    waste_items: List[WasteItem] = []
 
 class WasteItemRequest(BaseModel):
-    itemId: int
+    item_id: int
     name: str
     reason: str
-    containerId: str
+    container_id: str
     position: str
-
-class CompleteUndockingRequest(BaseModel):
-    undockingContainerId: str
-    timestamp: str
 
 class ReturnPlanStep(BaseModel):
     step: int
-    itemId: int
-    itemName: str
-    fromContainer: str
-    toContainer: str
-
+    item_id: int
+    item_name: str
+    from_container: str
+    to_container: str
 
 class ReturnItem(BaseModel):
-    itemId: int
+    item_id: int
     name: str
     reason: str
 
 class ReturnManifest(BaseModel):
-    undockingContainerId: str
-    undockingDate: str
-    returnItems: List[ReturnItem]
-    totalVolume: float
-    totalWeight: float
+    undocking_container_id: str
+    undocking_date: str
+    return_items: List[ReturnItem]
+    total_volume: float
+    total_weight: float
 
 class ReturnPlanResponse(BaseModel):
     success: bool
-    returnPlan: List[ReturnPlanStep]
-    retrievalSteps: List[RetrievalStep]
-    returnManifest: ReturnManifest
-
-
-
-
+    return_plan: List[ReturnPlanStep]
+    retrieval_steps: List[RetrievalStep]
+    return_manifest: ReturnManifest
