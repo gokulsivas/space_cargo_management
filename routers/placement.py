@@ -14,26 +14,24 @@ async def process_placement(request: PlacementRequest) -> PlacementResponse:
         raise HTTPException(status_code=400, detail="Items and containers must be provided.")
 
     try:
-        print(f"Processing placement request with {len(request.items)} items and {len(request.containers)} containers")
         placements = []
         rearrangements = []
 
         # Process each container separately
         for container in request.containers:
-            print(f"Processing container {container.containerId} for zone {container.zone}")
             
             # Initialize advanced placement algorithm for this container
             cargo_placer = AdvancedCargoPlacement({
-                "width": container.width,
-                "depth": container.depth,
-                "height": container.height
+                "width_cm": container.width_cm,
+                "depth_cm": container.depth_cm,
+                "height_cm": container.height_cm
             })
 
             # Get items assigned to this container's zone
             container_items = [
                 item.dict() 
                 for item in request.items 
-                if item.preferredZone == container.zone
+                if item.preferred_zone == container.zone
             ]
             
             print(f"Found {len(container_items)} items for zone {container.zone}")
@@ -43,11 +41,11 @@ async def process_placement(request: PlacementRequest) -> PlacementResponse:
 
             # Find optimal placement for items in this container
             container_placements = cargo_placer.find_optimal_placement(container_items)
-            print(f"Generated {len(container_placements)} placements for container {container.containerId}")
+            print(f"Generated {len(container_placements)} placements for container {container.container_id}")
 
             # Add container ID to placements
             for placement in container_placements:
-                placement["containerId"] = container.containerId
+                placement["container_id"] = container.container_id
                 placements.append(placement)
 
         success = len(placements) > 0
