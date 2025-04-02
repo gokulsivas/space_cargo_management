@@ -22,7 +22,7 @@ logs_df = pl.DataFrame(schema={
     "timestamp": pl.Utf8,
     "userId": pl.Utf8,
     "actionType": pl.Utf8,
-    "itemId": pl.Utf8,
+    "itemId": pl.Int64, # TO integer
     "details": pl.Utf8  # Store details as a string (JSON)
 })
 
@@ -93,7 +93,7 @@ async def import_items(file: UploadFile = File(...)):
     for row_number, row in enumerate(items_json, start=1):
         try:
             # Convert and validate required fields
-            itemId = row["itemId"]
+            itemId = int(row["itemId"])
             width = float(row["width"])
             depth = float(row["depth"])
             height = float(row["height"])
