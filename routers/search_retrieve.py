@@ -6,6 +6,8 @@ from typing import Optional
 from schemas import Coordinates, Position, Item_for_search, SearchResponse, RetrievalStep, RetrieveItemRequest, PlaceItemRequest, PlaceItemResponse, CargoPlacementSystem
 import datetime
 import csv
+from algos.retrieve_algo import PriorityAStarRetrieval
+from algos.search_algo import OptimizedSearch
 
 router = APIRouter(
     prefix="/api",
@@ -40,6 +42,11 @@ async def search_item(
         items_df = pl.read_csv(items_file)
         containers_df = pl.read_csv(containers_file)
         
+          # Enhanced error handling for file loading
+        if any(df.is_empty() for df in [cargo_df, items_df, containers_df]):
+            print("One or more CSV files are empty")
+            return SearchResponse(success=False, found=False)
+        
         # Print columns for debugging
         print(f"Available cargo columns: {cargo_df.columns}")
         print(f"Available items columns: {items_df.columns}")
@@ -73,45 +80,44 @@ async def search_item(
                 return SearchResponse(success=True, found=False)
         
         # Step 2: Now find the item in cargo.csv
-        cargo_item = cargo_df.filter(pl.col("itemId") == target_item_id)
+        cargo_item = cargo_df.lazy().filter(pl.col("itemId") == target_item_id).collect()
         if cargo_item.is_empty():
             print(f"Item with ID {target_item_id} not found in cargo.csv")
             return SearchResponse(success=True, found=False)
-        
+
         cargo_info = cargo_item.row(0, named=True)
         target_zone = cargo_info["zone"]
+
+        # Enhanced coordinate parsing with better error handling
+        if "coordinates" not in cargo_info:
+            print("Coordinates not found in cargo item data")
+            return SearchResponse(success=False, found=False)
+
+        coord_str = cargo_info["coordinates"]
+        coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', coord_str)
         
-        # Parse coordinates from string format "(W1,D1,H1),(W2,D2,H2)"
-        if "coordinates" in cargo_info:
-            coord_str = cargo_info["coordinates"]
-            print(coord_str)
-            # Extract numbers using regex
-            coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', coord_str)
-            print(coords)
-            if len(coords) >= 6:
-                w1, d1, h1, w2, d2, h2 = map(float, coords[:6])
-                start_coords = Coordinates(width=w1, depth=d1, height=h1)
-                end_coords = Coordinates(width=w2, depth=d2, height=h2)
-            else:
-                # Fallback if parsing fails
-                print(f"Could not parse coordinates: {coord_str}")
-        else:
-            ## TODO  add json error msg
-            print(f"Coordinates not found in cargo item data")
-        
-        # Step 3: Find container ID based on zone in containers.csv
+        try:
+            w1, d1, h1, w2, d2, h2 = map(float, coords[:6])
+            start_coords = Coordinates(width=w1, depth=d1, height=h1)
+            end_coords = Coordinates(width=w2, depth=d2, height=h2)
+        except (ValueError, IndexError) as e:
+            print(f"Error parsing coordinates: {str(e)}")
+            return SearchResponse(success=False, found=False)
+
+        # Enhanced container lookup
         container_id = None
-        container_data = containers_df.filter(pl.col("zone") == target_zone)
+        container_data = containers_df.lazy().filter(pl.col("zone") == target_zone).collect()
         if not container_data.is_empty():
             container_id = container_data.row(0, named=True)["containerId"]
-        else:
-            print(f"Container for zone {target_zone} not found in containers.csv")
-            # We'll still proceed, but with unknown container ID
-        
-        # Find potentially blocking items in the same zone
-        blocking_items = cargo_df.filter(
-            (pl.col("zone") == target_zone) & 
-            (pl.col("itemId") != target_item_id)
+
+        # Optimized blocking items search
+        blocking_items = (
+            cargo_df.lazy()
+            .filter(
+                (pl.col("zone") == target_zone) & 
+                (pl.col("itemId") != target_item_id)
+            )
+            .collect()
         )
         
         # Generate retrieval steps
@@ -162,19 +168,24 @@ async def search_item(
             step_counter += 1
         
         # Create the item object
-        item = Item_for_search(
-            itemId=target_item_id,
-            name=target_item_name,
-            containerId=container_id if container_id else "unknown",
-            zone=target_zone,
-            position=Position(
-                startCoordinates=dict(start_coords),
-                endCoordinates=dict(end_coords)
+        try:
+            item = Item_for_search(
+                itemId=target_item_id,
+                name=target_item_name,
+                containerId=container_id if container_id else "unknown",
+                zone=target_zone,
+                position=Position(
+                    startCoordinates=dict(start_coords),
+                    endCoordinates=dict(end_coords)
+                )
             )
-        )
+        except Exception as e:
+            print(f"Error creating response object: {str(e)}")
+            return SearchResponse(success=False, found=False)
+
         print(f"Item found: {item}")
-        
         print(f"Response created with {len(retrieval_steps)} retrieval steps")
+
         return SearchResponse(
             success=True,
             found=True,
@@ -229,18 +240,76 @@ async def retrieve_item(
         if item_data.is_empty():
             return {"success": False}
         
-        # Get current usage limit (ensuring we get it as an integer)
-        current_usage = int(item_data.select("usageLimit")[0, 0])
-        
-        # Debug print to check initial value
-        print(f"Initial usage limit for item {item_id}: {current_usage}")
-        
-        # Check if item has any uses left
-        if current_usage <= 0:
-            print(f"Item {item_id} has no uses left")
-            return {"success": False}
+        zone = item_in_cargo.select("zone")[0, 0]
+        container_data = containers_df.filter(pl.col("zone") == zone)
+        if container_data.is_empty():
+            return {"success": False, "error": "Container not found"}
             
-        # Decrement usage limit
+        container_dims = container_data.row(0, named=True)
+        # Initialize retrieval algorithm
+        retriever = PriorityAStarRetrieval({
+            "width": float(container_dims["width"]),
+            "depth": float(container_dims["depth"]),
+            "height": float(container_dims["height"])
+        })
+        
+        # Parse item coordinates
+        coord_str = item_in_cargo.select("coordinates")[0, 0]
+        coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', coord_str)
+        if len(coords) < 6:
+            return {"success": False, "error": "Invalid coordinates"}
+            
+        # Set start and target positions
+        start_pos = (0, 0, 0)  # Container entrance
+        target_pos = (int(float(coords[0])), int(float(coords[1])), int(float(coords[2])))
+        
+        # Find all blocking items and mark their spaces as occupied
+        blocking_items = cargo_df.filter(
+            (pl.col("zone") == zone) & 
+            (pl.col("itemId") != item_id)
+        )
+        
+        for blocking_item in blocking_items.iter_rows(named=True):
+            block_coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', blocking_item["coordinates"])
+            if len(block_coords) >= 6:
+                x1, y1, z1 = map(lambda x: int(float(x)), block_coords[:3])
+                x2, y2, z2 = map(lambda x: int(float(x)), block_coords[3:6])
+                for x in range(x1, x2+1):
+                    for y in range(y1, y2+1):
+                        for z in range(z1, z2+1):
+                            retriever.occupied_spaces.add((x, y, z))
+        
+        # Find retrieval path
+        path = retriever.find_retrieval_path(start_pos, target_pos, str(item_id))
+        
+        if not path:
+            return {"success": False, "error": "No valid retrieval path found"}
+            
+        # Process retrieval steps
+        retrieval_steps = []
+        for idx, step in enumerate(path.steps, 1):
+            retrieval_steps.append({
+                "step": idx,
+                "action": "move",
+                "itemId": item_id,
+                "from": {
+                    "x": step["from"][0],
+                    "y": step["from"][1],
+                    "z": step["from"][2]
+                },
+                "to": {
+                    "x": step["to"][0],
+                    "y": step["to"][1],
+                    "z": step["to"][2]
+                },
+                "priority": step["priority"]
+            })
+        # Get current usage limit (ensuring we get it as an integer)
+         # Handle usage limit and waste as in original code
+        current_usage = int(items_df.filter(pl.col("itemId") == item_id).select("usageLimit")[0, 0])
+        if current_usage <= 0:
+            return {"success": False, "error": "Item has no uses left"}
+            
         new_usage = current_usage - 1
         print(f"New usage limit for item {item_id}: {new_usage}")
         
@@ -260,6 +329,7 @@ async def retrieve_item(
         # Only remove from cargo if usage is now 0
         if new_usage == 0:
             print(f"Removing item {item_id} from cargo as it has 0 uses left")
+            
             # Remove from cargo arrangement
             updated_cargo_df = cargo_df.filter(pl.col("itemId") != item_id)
             updated_cargo_df.write_csv(cargo_file)
@@ -286,7 +356,7 @@ async def retrieve_item(
                 position=position_data
             )
         
-        return {"success": True}
+        return {"success": True,}
         
     except Exception as e:
         print(f"Error in retrieve endpoint: {str(e)}")
