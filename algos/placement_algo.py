@@ -26,12 +26,12 @@ class Position3D:
 
 @dataclass
 class ItemDimensions:
-    width: float
-    depth: float
-    height: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
     priority: int
-    mass: float = 0
-    itemId: Optional[Union[str, int]] = None
+    mass_kg: float = 0
+    item_id: Optional[Union[str, int]] = None
 
 class Rotation(Enum):
     NO_ROTATION = "NO_ROTATION"
@@ -49,10 +49,10 @@ def load_csv(filename):
 
 class SparseMatrix:
     """Sparse 3D matrix implementation for memory efficiency"""
-    def __init__(self, width, depth, height):
-        self.width = int(width)
-        self.depth = int(depth)
-        self.height = int(height)
+    def __init__(self, width_cm, depth_cm, height_cm):
+        self.width_cm = int(width_cm)
+        self.depth_cm = int(depth_cm)
+        self.height_cm = int(height_cm)
         self.occupied_cells = set()  # Store only occupied coordinates
 
     def is_occupied(self, x_start, y_start, z_start, x_end, y_end, z_end):
@@ -99,14 +99,14 @@ class SpaceOctree:
         item_id_str = str(item_id)
         
         start = np.array([
-            position["startCoordinates"]["width"],
-            position["startCoordinates"]["depth"],
-            position["startCoordinates"]["height"]
+            position["startCoordinates"]["width_cm"],
+            position["startCoordinates"]["depth_cm"],
+            position["startCoordinates"]["height_cm"]
         ])
         end = np.array([
-            position["endCoordinates"]["width"],
-            position["endCoordinates"]["depth"],
-            position["endCoordinates"]["height"]
+            position["endCoordinates"]["width_cm"],
+            position["endCoordinates"]["depth_cm"],
+            position["endCoordinates"]["height_cm"]
         ])
         
         success = self._insert_recursive(self.root, start, end, item_id_str, rotation, priority)
@@ -122,11 +122,11 @@ class SpaceOctree:
         """Add item to spatial hash for faster neighbor lookups"""
         # Calculate grid cells that this item occupies
         start_cell = (int(start[0] // self.grid_size), 
-                       int(start[1] // self.grid_size), 
-                       int(start[2] // self.grid_size))
+                     int(start[1] // self.grid_size), 
+                     int(start[2] // self.grid_size))
         end_cell = (int(end[0] // self.grid_size) + 1, 
-                     int(end[1] // self.grid_size) + 1, 
-                     int(end[2] // self.grid_size) + 1)
+                   int(end[1] // self.grid_size) + 1, 
+                   int(end[2] // self.grid_size) + 1)
         
         # Add item to all cells it intersects
         for x in range(start_cell[0], end_cell[0]):
@@ -135,7 +135,7 @@ class SpaceOctree:
                     self.spatial_hash[(x, y, z)].append(item_id)
 
     def _insert_recursive(self, node: OctreeNode, start: np.ndarray, end: np.ndarray, 
-                         item_id: str, rotation: str, priority: int) -> bool:
+                       item_id: str, rotation: str, priority: int) -> bool:
         if node.occupied:
             return False
 
@@ -167,11 +167,11 @@ class SpaceOctree:
         return False
 
     def _bounds_overlap(self, min1: np.ndarray, max1: np.ndarray, 
-                       min2: np.ndarray, max2: np.ndarray) -> bool:
+                     min2: np.ndarray, max2: np.ndarray) -> bool:
         return np.all(max1 >= min2) and np.all(max2 >= min1)
 
     def _bounds_similar(self, min1: np.ndarray, max1: np.ndarray, 
-                       min2: np.ndarray, max2: np.ndarray, tolerance: float = 0.1) -> bool:
+                     min2: np.ndarray, max2: np.ndarray, tolerance: float = 0.1) -> bool:
         size1 = max1 - min1
         size2 = max2 - min2
         return np.all(np.abs(size1 - size2) < tolerance)
@@ -206,11 +206,11 @@ class SpaceOctree:
         
         # Calculate grid cells this item occupies
         start_cell = (int(start[0] // self.grid_size), 
-                       int(start[1] // self.grid_size), 
-                       int(start[2] // self.grid_size))
+                     int(start[1] // self.grid_size), 
+                     int(start[2] // self.grid_size))
         end_cell = (int(end[0] // self.grid_size) + 1, 
-                     int(end[1] // self.grid_size) + 1, 
-                     int(end[2] // self.grid_size) + 1)
+                   int(end[1] // self.grid_size) + 1, 
+                   int(end[2] // self.grid_size) + 1)
         
         # Get all items in those cells and adjacent cells
         for x in range(start_cell[0] - 1, end_cell[0] + 1):
@@ -222,29 +222,28 @@ class SpaceOctree:
         
         return list(neighbors)
 
-
 class AdvancedCargoPlacement:
     def __init__(self, container_dims: Dict[str, float]):
         # Initialize with container dimensions
-        self.width = container_dims["width"]
-        self.depth = container_dims["depth"]
-        self.height = container_dims["height"]
+        self.width_cm = container_dims["width_cm"]
+        self.depth_cm = container_dims["depth_cm"]
+        self.height_cm = container_dims["height_cm"]
         
         # Use sparse matrix instead of full 3D array
-        self.space_matrix = SparseMatrix(self.width, self.depth, self.height)
+        self.space_matrix = SparseMatrix(self.width_cm, self.depth_cm, self.height_cm)
         
         # Pre-load and cache item data
         try:
             # Use Polars for faster CSV loading
             self.items_df = pl.read_csv("imported_items.csv")
-            self.items_dict = {str(row["itemId"]): row for row in self.items_df.to_dicts()}
+            self.items_dict = {str(row["item_id"]): row for row in self.items_df.to_dicts()}
             
             # Create index for faster lookups
             self.dupe_items = {}
             dupe_data = pl.read_csv("dupe_imported_items.csv")
             for row in dupe_data.to_dicts():
-                if "itemId" in row:
-                    self.dupe_items[str(row["itemId"])] = row
+                if "item_id" in row:
+                    self.dupe_items[str(row["item_id"])] = row
         except Exception as e:
             print(f"Warning: Could not load item data: {str(e)}")
             self.items_df = pl.DataFrame()
@@ -252,8 +251,8 @@ class AdvancedCargoPlacement:
             self.dupe_items = {}
         
         # Initialize octree with optimized parameters
-        center = np.array([self.width/2, self.depth/2, self.height/2])
-        size = max(self.width, self.depth, self.height)
+        center = np.array([self.width_cm/2, self.depth_cm/2, self.height_cm/2])
+        size = max(self.width_cm, self.depth_cm, self.height_cm)
         # Reduce max_depth for faster operations
         self.octree = SpaceOctree(center, size, max_depth=4)
         
@@ -263,8 +262,8 @@ class AdvancedCargoPlacement:
     def calculate_accessibility_score(self, pos: Position3D, item: ItemDimensions) -> float:
         """Optimized accessibility score calculation"""
         try:
-            # Convert itemId to string for consistency
-            item_id_str = str(item.itemId)
+            # Convert item_id to string for consistency
+            item_id_str = str(item.item_id)
             
             # 1. Priority Score (40%) - simplify calculation
             priority_score = item.priority / 100
@@ -273,9 +272,9 @@ class AdvancedCargoPlacement:
             expiry_score = 1.0
             
             item_data = self.items_dict.get(item_id_str, {})
-            if item_data and "expiryDate" in item_data and item_data["expiryDate"]:
+            if item_data and "expiry_date" in item_data and item_data["expiry_date"]:
                 try:
-                    expiry = datetime.strptime(str(item_data["expiryDate"]), "%d-%m-%y")
+                    expiry = datetime.strptime(str(item_data["expiry_date"]), "%d-%m-%y")
                     current_date = datetime.now()
                     days_until_expiry = (expiry - current_date).days
                     # Simplified calculation
@@ -286,10 +285,10 @@ class AdvancedCargoPlacement:
             # 3. Usage Score (25%) - use cached item data
             usage_score = 0.5  # Default
             dupe_item = self.dupe_items.get(item_id_str, {})
-            if item_data and dupe_item and "usageLimit" in item_data and "usageLimit" in dupe_item:
+            if item_data and dupe_item and "usage_limit" in item_data and "usage_limit" in dupe_item:
                 try:
-                    current_usage_limit = float(item_data["usageLimit"])
-                    dupe_usage_limit = float(dupe_item["usageLimit"])
+                    current_usage_limit = float(item_data["usage_limit"])
+                    dupe_usage_limit = float(dupe_item["usage_limit"])
                     if dupe_usage_limit > 0:
                         usage_score = min(1.0, current_usage_limit / dupe_usage_limit)
                 except (ValueError, TypeError):
@@ -326,32 +325,32 @@ class AdvancedCargoPlacement:
     def _can_place_item(self, pos: Position3D, item: ItemDimensions) -> bool:
         """Check if an item can be placed at a given position using sparse matrix."""
         # Check boundaries
-        if (pos.x + item.width > self.width or
-            pos.y + item.depth > self.depth or
-            pos.z + item.height > self.height):
+        if (pos.x + item.width_cm > self.width_cm or
+            pos.y + item.depth_cm > self.depth_cm or
+            pos.z + item.height_cm > self.height_cm):
             return False
 
         # Check if space is already occupied using sparse matrix
         return not self.space_matrix.is_occupied(
             pos.x, pos.y, pos.z,
-            int(pos.x + item.width),
-            int(pos.y + item.depth),
-            int(pos.z + item.height)
+            int(pos.x + item.width_cm),
+            int(pos.y + item.depth_cm),
+            int(pos.z + item.height_cm)
         )
 
     def _place_item(self, pos: Position3D, item: ItemDimensions) -> None:
         """Place an item using sparse matrix"""
         self.space_matrix.occupy(
             pos.x, pos.y, pos.z,
-            int(pos.x + item.width),
-            int(pos.y + item.depth),
-            int(pos.z + item.height)
+            int(pos.x + item.width_cm),
+            int(pos.y + item.depth_cm),
+            int(pos.z + item.height_cm)
         )
 
     def get_90degree_rotations(self, item: ItemDimensions) -> List[Tuple[ItemDimensions, Rotation]]:
         """Get rotations with caching for performance"""
         # Use cache if available
-        cache_key = (item.width, item.depth, item.height, item.priority)
+        cache_key = (item.width_cm, item.depth_cm, item.height_cm, item.priority)
         if cache_key in self.rotation_cache:
             return self.rotation_cache[cache_key]
         
@@ -361,12 +360,12 @@ class AdvancedCargoPlacement:
         # Original orientation
         rotations.append((
             ItemDimensions(
-                width=item.width,
-                depth=item.depth,
-                height=item.height,
+                width_cm=item.width_cm,
+                depth_cm=item.depth_cm,
+                height_cm=item.height_cm,
                 priority=item.priority,
-                mass=item.mass,
-                itemId=item.itemId
+                mass_kg=item.mass_kg,
+                item_id=item.item_id
             ),
             Rotation.NO_ROTATION
         ))
@@ -374,12 +373,12 @@ class AdvancedCargoPlacement:
         # Rotate around X axis (90°)
         rotations.append((
             ItemDimensions(
-                width=item.width,
-                depth=item.height,
-                height=item.depth,
+                width_cm=item.width_cm,
+                depth_cm=item.height_cm,
+                height_cm=item.depth_cm,
                 priority=item.priority,
-                mass=item.mass,
-                itemId=item.itemId
+                mass_kg=item.mass_kg,
+                item_id=item.item_id
             ),
             Rotation.ROTATE_X
         ))
@@ -387,12 +386,12 @@ class AdvancedCargoPlacement:
         # Rotate around Y axis (90°)
         rotations.append((
             ItemDimensions(
-                width=item.height,
-                depth=item.depth,
-                height=item.width,
+                width_cm=item.height_cm,
+                depth_cm=item.depth_cm,
+                height_cm=item.width_cm,
                 priority=item.priority,
-                mass=item.mass,
-                itemId=item.itemId
+                mass_kg=item.mass_kg,
+                item_id=item.item_id
             ),
             Rotation.ROTATE_Y
         ))
@@ -400,12 +399,12 @@ class AdvancedCargoPlacement:
         # Rotate around Z axis (90°)
         rotations.append((
             ItemDimensions(
-                width=item.depth,
-                depth=item.width,
-                height=item.height,
+                width_cm=item.depth_cm,
+                depth_cm=item.width_cm,
+                height_cm=item.height_cm,
                 priority=item.priority,
-                mass=item.mass,
-                itemId=item.itemId
+                mass_kg=item.mass_kg,
+                item_id=item.item_id
             ),
             Rotation.ROTATE_Z
         ))
@@ -413,9 +412,9 @@ class AdvancedCargoPlacement:
         # Filter valid rotations
         valid_rotations = [
             (rot, name) for rot, name in rotations
-            if (rot.width <= self.width and 
-                rot.depth <= self.depth and 
-                rot.height <= self.height)
+            if (rot.width_cm <= self.width_cm and 
+                rot.depth_cm <= self.depth_cm and 
+                rot.height_cm <= self.height_cm)
         ]
         
         # Cache for future use
@@ -430,31 +429,31 @@ class AdvancedCargoPlacement:
         # Sort items by priority and volume
         sorted_items = sorted(
             items,
-            key=lambda x: (x["priority"], x["width"] * x["depth"] * x["height"]),
+            key=lambda x: (x["priority"], x["width_cm"] * x["depth_cm"] * x["height_cm"]),
             reverse=True
         )
         
         # Group similar items for batch processing
         item_groups = {}
         for item in sorted_items:
-            key = (item["width"], item["depth"], item["height"], item["priority"])
+            key = (item["width_cm"], item["depth_cm"], item["height_cm"], item["priority"])
             if key not in item_groups:
                 item_groups[key] = []
             item_groups[key].append(item)
         
         # Build a height map to place items at optimal heights
-        height_map = np.zeros((int(self.width), int(self.depth)), dtype=np.int32)
+        height_map = np.zeros((int(self.width_cm), int(self.depth_cm)), dtype=np.int32)
         
         # Process each group of similar items
         for dimensions, group_items in item_groups.items():
             for item_dict in group_items:
                 item = ItemDimensions(
-                    width=item_dict["width"],
-                    depth=item_dict["depth"],
-                    height=item_dict["height"],
+                    width_cm=item_dict["width_cm"],
+                    depth_cm=item_dict["depth_cm"],
+                    height_cm=item_dict["height_cm"],
                     priority=item_dict["priority"],
-                    mass=item_dict.get("mass", 0),
-                    itemId=item_dict["itemId"]
+                    mass_kg=item_dict.get("mass_kg", 0),
+                    item_id=item_dict["item_id"]
                 )
 
                 # Get valid rotations
@@ -473,14 +472,14 @@ class AdvancedCargoPlacement:
                         candidate_positions = []
                         
                         # Find suitable positions on height map
-                        for x in range(0, int(self.width - rotated_item.width + 1), 2):
-                            for y in range(0, int(self.depth - rotated_item.depth + 1), 2):
+                        for x in range(0, int(self.width_cm - rotated_item.width_cm + 1), 2):
+                            for y in range(0, int(self.depth_cm - rotated_item.depth_cm + 1), 2):
                                 # Get the highest point in this region
-                                region_height = np.max(height_map[x:x+int(rotated_item.width), 
-                                                                y:y+int(rotated_item.depth)])
+                                region_height = np.max(height_map[x:x+int(rotated_item.width_cm), 
+                                                                y:y+int(rotated_item.depth_cm)])
                                 
                                 # Try to place at this height
-                                if region_height + rotated_item.height <= self.height:
+                                if region_height + rotated_item.height_cm <= self.height_cm:
                                     candidate_positions.append(Position3D(x, y, region_height))
                         
                         # Sort positions by height (highest first for efficient packing)
@@ -500,14 +499,14 @@ class AdvancedCargoPlacement:
                     # 2. If no placement found, use a grid search with adaptive steps
                     if best_placement is None:
                         # Adaptive step size based on container dimensions
-                        step_size = max(1, min(int(self.width//20), int(self.depth//20)))
+                        step_size = max(1, min(int(self.width_cm//20), int(self.depth_cm//20)))
                         
                         # Try bottom-up placement to minimize vertical space
-                        for z in range(0, int(self.height - rotated_item.height + 1)):
+                        for z in range(0, int(self.height_cm - rotated_item.height_cm + 1)):
                             found_in_layer = False
                             
-                            for x in range(0, int(self.width - rotated_item.width + 1), step_size):
-                                for y in range(0, int(self.depth - rotated_item.depth + 1), step_size):
+                            for x in range(0, int(self.width_cm - rotated_item.width_cm + 1), step_size):
+                                for y in range(0, int(self.depth_cm - rotated_item.depth_cm + 1), step_size):
                                     pos = Position3D(x, y, z)
                                     
                                     if self._can_place_item(pos, rotated_item):
@@ -530,22 +529,22 @@ class AdvancedCargoPlacement:
                     self._place_item(pos, rotated_item)
                     
                     # Update height map
-                    height_map[pos.x:pos.x+int(rotated_item.width), 
-                               pos.y:pos.y+int(rotated_item.depth)] = pos.z + rotated_item.height
+                    height_map[pos.x:pos.x+int(rotated_item.width_cm), 
+                             pos.y:pos.y+int(rotated_item.depth_cm)] = pos.z + rotated_item.height_cm
                     
                     # Create placement record
                     placement = {
-                        "itemId": item_dict["itemId"],
+                        "item_id": item_dict["item_id"],
                         "position": {
                             "startCoordinates": {
-                                "width": float(pos.x),
-                                "depth": float(pos.y),
-                                "height": float(pos.z)
+                                "width_cm": float(pos.x),
+                                "depth_cm": float(pos.y),
+                                "height_cm": float(pos.z)
                             },
                             "endCoordinates": {
-                                "width": float(pos.x + rotated_item.width),
-                                "depth": float(pos.y + rotated_item.depth),
-                                "height": float(pos.z + rotated_item.height)
+                                "width_cm": float(pos.x + rotated_item.width_cm),
+                                "depth_cm": float(pos.y + rotated_item.depth_cm),
+                                "height_cm": float(pos.z + rotated_item.height_cm)
                             }
                         },
                         "rotation": best_rotation.value,
@@ -554,7 +553,7 @@ class AdvancedCargoPlacement:
                     
                     # Add to octree
                     self.octree.insert_item(
-                        item_dict["itemId"],
+                        item_dict["item_id"],
                         placement["position"],
                         best_rotation.value,
                         item.priority
