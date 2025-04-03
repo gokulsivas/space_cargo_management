@@ -20,9 +20,9 @@ LOG_FILE = "logs.csv"
 log_columns = ["timestamp", "user_id", "action_type", "item_id", "details"]
 logs_df = pl.DataFrame(schema={
     "timestamp": pl.Utf8,
-    "user_id": pl.Utf8,
-    "action_type": pl.Utf8,
-    "item_id": pl.Utf8,
+    "userId": pl.Utf8,
+    "actionType": pl.Utf8,
+    "itemId": pl.Int64, # TO integer
     "details": pl.Utf8  # Store details as a string (JSON)
 })
 
@@ -94,11 +94,11 @@ async def import_items(file: UploadFile = File(...)):
     for row_number, row in enumerate(items_json, start=1):
         try:
             # Convert and validate required fields
-            item_id = row["item_id"]
-            width_cm = float(row["width_cm"])
-            depth_cm = float(row["depth_cm"])
-            height_cm = float(row["height_cm"])
-            mass_kg = float(row["mass_kg"])
+            itemId = int(row["itemId"])
+            width = float(row["width"])
+            depth = float(row["depth"])
+            height = float(row["height"])
+            mass = float(row["mass"])
             priority_value = int(row["priority"])
             preferred_zone = row["preferred_zone"]
             name = row["name"]
