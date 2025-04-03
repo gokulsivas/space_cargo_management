@@ -3,5 +3,3 @@ __pycache__/
 *.so
 *.pyd
 *.dll
-routers/__pycache__/search_retrieve.cpython-311.pyc
-routers/__pycache__/import_export.cpython-311.pyc
