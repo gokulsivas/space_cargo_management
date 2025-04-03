@@ -31,7 +31,7 @@ except ImportError:
         height_cm: float
 
     class ItemDetails(BaseModel):
-        item_id: str
+        item_id: int
         container_id: str
         width: float
         depth: float
@@ -44,7 +44,7 @@ except ImportError:
         containers: List[ContainerDetails]
 
     class ItemPlacementResult(BaseModel):
-        item_id: str
+        item_id: int
         container_id: str
         item_name: Optional[str] = None
         position_x: float
