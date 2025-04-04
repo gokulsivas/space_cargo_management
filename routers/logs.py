@@ -94,6 +94,10 @@ async def get_logs(
     global logs_df
     
     try:
+        # Fix invalid ISO format by removing extra colon after T
+        startDate = startDate.replace("T:", "T")
+        endDate = endDate.replace("T:", "T")
+        
         print(f"Getting logs with filters: startDate={startDate}, endDate={endDate}, item_id={item_id}, user_id={user_id}, action_type={action_type}")
         
         # Load logs from file
