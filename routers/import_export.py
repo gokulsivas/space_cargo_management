@@ -241,40 +241,73 @@ async def export_arrangement():
         total_items = len(cargo_system.items_df)
         print(f"Total items to process: {total_items}")
         
-        # Create direct placements without octree
+        # Group containers by zone
+        containers_by_zone = {}
+        for container in cargo_system.containers_df.iter_rows(named=True):
+            zone = container["zone"]
+            if zone not in containers_by_zone:
+                containers_by_zone[zone] = []
+            containers_by_zone[zone].append({
+                "container_id": container["container_id"],
+                "width_cm": float(container["width_cm"]),
+                "depth_cm": float(container["depth_cm"]),
+                "height_cm": float(container["height_cm"]),
+                "current_position": {"x": 0, "y": 0, "z": 0},
+                "used_volume": 0
+            })
+        
+        # Create direct placements
         placements = []
-        current_position = {"x": 0, "y": 0, "z": 0}
         
         # Process each item and assign to its preferred zone
         for item in cargo_system.items_df.iter_rows(named=True):
             try:
-                # Get container dimensions for the preferred zone
-                container = cargo_system.containers_df.filter(
-                    pl.col("zone") == item["preferred_zone"]
-                ).row(0, named=True)
+                zone = item["preferred_zone"]
+                if zone not in containers_by_zone:
+                    print(f"Warning: No containers found for zone {zone}, skipping item {item['item_id']}")
+                    continue
+                
+                # Find the best container in the zone (least used volume)
+                best_container = min(
+                    containers_by_zone[zone],
+                    key=lambda c: c["used_volume"]
+                )
+                
+                current_pos = best_container["current_position"]
                 
                 # Calculate item placement
                 placement = {
                     "item_id": item["item_id"],
-                    "zone": item["preferred_zone"],
-                    "start_x_cm": current_position["x"],
-                    "start_y_cm": current_position["y"],
-                    "start_z_cm": current_position["z"],
-                    "end_x_cm": current_position["x"] + item["width_cm"],
-                    "end_y_cm": current_position["y"] + item["depth_cm"],
-                    "end_z_cm": current_position["z"] + item["height_cm"]
+                    "zone": zone,
+                    "container_id": best_container["container_id"],
+                    "start_x_cm": current_pos["x"],
+                    "start_y_cm": current_pos["y"],
+                    "start_z_cm": current_pos["z"],
+                    "end_x_cm": current_pos["x"] + item["width_cm"],
+                    "end_y_cm": current_pos["y"] + item["depth_cm"],
+                    "end_z_cm": current_pos["z"] + item["height_cm"]
                 }
                 
+                # Update container's current position and used volume
+                item_volume = item["width_cm"] * item["depth_cm"] * item["height_cm"]
+                best_container["used_volume"] += item_volume
+                
                 # Update position for next item (simple stacking)
-                if current_position["x"] + item["width_cm"] * 2 <= float(container["width_cm"]):
-                    current_position["x"] += item["width_cm"]
+                if current_pos["x"] + item["width_cm"] * 2 <= best_container["width_cm"]:
+                    current_pos["x"] += item["width_cm"]
                 else:
-                    current_position["x"] = 0
-                    if current_position["y"] + item["depth_cm"] * 2 <= float(container["depth_cm"]):
-                        current_position["y"] += item["depth_cm"]
+                    current_pos["x"] = 0
+                    if current_pos["y"] + item["depth_cm"] * 2 <= best_container["depth_cm"]:
+                        current_pos["y"] += item["depth_cm"]
                     else:
-                        current_position["y"] = 0
-                        current_position["z"] += item["height_cm"]
+                        current_pos["y"] = 0
+                        current_pos["z"] += item["height_cm"]
+                
+                # Check if container is full
+                if current_pos["z"] + item["height_cm"] > best_container["height_cm"]:
+                    print(f"Container {best_container['container_id']} in zone {zone} is full")
+                    # Mark container as full by setting used_volume to a very high value
+                    best_container["used_volume"] = float('inf')
                 
                 placements.append(placement)
                 
@@ -287,22 +320,34 @@ async def export_arrangement():
         
         with open(arrangement_csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["item_id", "zone", "coordinates"])
+            writer.writerow(["item_id", "zone", "container_id", "coordinates"])
             
             for placement in placements:
                 writer.writerow([
                     placement["item_id"],
                     placement["zone"],
+                    placement["container_id"],
                     f"({round(placement['start_x_cm'], 2)},{round(placement['start_y_cm'], 2)},{round(placement['start_z_cm'], 2)}),"
                     f"({round(placement['end_x_cm'], 2)},{round(placement['end_y_cm'], 2)},{round(placement['end_z_cm'], 2)})"
                 ])
         
         print(f"Wrote {len(placements)} placements to {arrangement_csv_path}")
         
+        # Print container usage statistics
+        for zone, containers in containers_by_zone.items():
+            print(f"\nZone {zone} container usage:")
+            for container in containers:
+                if container["used_volume"] != float('inf'):
+                    total_volume = container["width_cm"] * container["depth_cm"] * container["height_cm"]
+                    usage_percentage = (container["used_volume"] / total_volume) * 100
+                    print(f"Container {container['container_id']}: {usage_percentage:.2f}% used")
+                else:
+                    print(f"Container {container['container_id']}: Full")
+        
         # Prepare the response
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["item_id", "zone", "coordinates"])
+        writer.writerow(["item_id", "zone", "container_id", "coordinates"])
         
         with open(arrangement_csv_path, 'r') as csvfile:
             reader = csv.reader(csvfile)
