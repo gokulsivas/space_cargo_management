@@ -1,14 +1,13 @@
 from typing import Dict, List, Union, Optional, Tuple, Any
 from dataclasses import dataclass
-import json
-from collections import defaultdict
 import re
+from collections import defaultdict
 
 @dataclass
 class Coordinates:
-    width: float
-    depth: float
-    height: float
+    width_cm: float
+    depth_cm: float
+    height_cm: float
 
 @dataclass
 class Position:
@@ -17,94 +16,87 @@ class Position:
 
 class ItemSearchSystem:
     def __init__(self, items_data: List[dict], containers_data: List[dict], cargo_data: List[dict]):
-        """Initialize search system with data from API endpoint"""
+        """Initialize with data from API endpoint"""
         self.items_data = {
             str(item["item_id"]): {
                 "name": item["name"],
-                "width": float(item["width_cm"]),
-                "depth": float(item["depth_cm"]),
-                "height": float(item["height_cm"]),
+                "width_cm": float(item["width_cm"]),
+                "depth_cm": float(item["depth_cm"]),
+                "height_cm": float(item["height_cm"]),
                 "priority": int(item.get("priority", 1)),
-                "expiry_date": item.get("expiry_date", ""),
-                "usage_limit": int(item.get("usage_limit", 0)),
-                "preferred_zone": item.get("preferred_zone", "")
+                "usage_limit": int(item.get("usage_limit", 0))
             }
             for item in items_data
-        }
-        self.zone_to_container = {
-            cont["zone"]: str(cont["container_id"]) 
-            for cont in containers_data
         }
         
         self.containers = {
             str(cont["container_id"]): {
-                "containerId": str(cont["container_id"]),
+                "container_id": str(cont["container_id"]),
                 "zone": cont["zone"],
-                "width": float(cont["width_cm"]),
-                "depth": float(cont["depth_cm"]),
-                "height": float(cont["height_cm"])
+                "width_cm": float(cont["width_cm"]),
+                "depth_cm": float(cont["depth_cm"]),
+                "height_cm": float(cont["height_cm"])
             }
             for cont in containers_data
         }
 
-        # Modified cargo data initialization
+        # Process cargo data with positions
         self.cargo_data = {}
         for item in cargo_data:
             item_id = str(item["item_id"])
             coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', item["coordinates"])
             if len(coords) >= 6:
-                zone = item["zone"]
                 self.cargo_data[item_id] = {
-                    "zone": zone,
-                    "containerId": self.zone_to_container.get(zone, ""),
+                    "zone": item["zone"],
                     "position": {
                         "startCoordinates": {
-                            "width_cm": float(coords[0]),  # Changed from width to width_cm
-                            "depth_cm": float(coords[1]),  # Changed from depth to depth_cm
-                            "height_cm": float(coords[2])  # Changed from height to height_cm
+                            "width_cm": float(coords[0]),
+                            "depth_cm": float(coords[1]),
+                            "height_cm": float(coords[2])
                         },
                         "endCoordinates": {
-                            "width_cm": float(coords[3]),  # Changed from width to width_cm
-                            "depth_cm": float(coords[4]),  # Changed from depth to depth_cm
-                            "height_cm": float(coords[5])  # Changed from height to height_cm
+                            "width_cm": float(coords[3]),
+                            "depth_cm": float(coords[4]),
+                            "height_cm": float(coords[5])
                         }
                     }
                 }
 
-
     def search_by_id(self, item_id: Union[int, str]) -> dict:
-        """Search for item by ID, returns API-compatible response"""
+        """Search for item by ID"""
         item_id = str(item_id)
         
+        if item_id not in self.items_data:
+            return {
+                "success": True,
+                "found": False,
+                "message": f"Item {item_id} not found in inventory"
+            }
+            
         if item_id not in self.cargo_data:
             return {
                 "success": True,
                 "found": False,
-                "item": None,
-                "retrieval_steps": []
+                "message": f"Item {item_id} exists but not placed in any container"
             }
-            
+
+        item_data = self.items_data[item_id]
         cargo_info = self.cargo_data[item_id]
         zone = cargo_info["zone"]
-        container_id = self.zone_to_container.get(zone)
+        
+        # Find container for zone
+        container_id = next(
+            (cid for cid, cont in self.containers.items() if cont["zone"] == zone),
+            None
+        )
         
         if not container_id:
             return {
                 "success": False,
-                "found": True,
-                "error": f"No container found for zone {zone}",
-                "item": None,
-                "retrieval_steps": []
+                "found": False,
+                "message": f"No container found for zone {zone}"
             }
-            
-        return self._prepare_response(item_id, container_id)
 
-    def _prepare_response(self, item_id: str, container_id: str) -> dict:
-        """Prepare API-compatible response"""
-        item_data = self.items_data[item_id]
-        cargo_info = self.cargo_data[item_id]
-        container = self.containers[container_id]
-        
         return {
             "success": True,
             "found": True,
@@ -112,39 +104,31 @@ class ItemSearchSystem:
                 "item_id": int(item_id),
                 "name": item_data["name"],
                 "container_id": container_id,
-                "zone": container["zone"],
+                "zone": zone,
                 "position": cargo_info["position"]
             },
-            "retrieval_steps": self._generate_retrieval_steps(item_id, container_id)
+            "retrieval_steps": self._generate_retrieval_steps(item_id, zone)
         }
 
-    def _generate_retrieval_steps(self, item_id: str, container_id: str) -> List[dict]:
-        """Generate retrieval steps in API-compatible format"""
-        item_data = self.items_data[item_id]
-        cargo_info = self.cargo_data[item_id]
-        container = self.containers[container_id]
-        
+    def search_by_name(self, item_name: str) -> dict:
+        """Search for item by name"""
+        for item_id, data in self.items_data.items():
+            if data["name"].lower() == item_name.lower():
+                return self.search_by_id(item_id)
+                
+        return {
+            "success": True,
+            "found": False,
+            "message": f"Item with name '{item_name}' not found"
+        }
+
+    def _generate_retrieval_steps(self, item_id: str, zone: str) -> List[dict]:
+        """Generate retrieval steps"""
         return [
             {
                 "step": 1,
-                "action": "locate",
-                "item_id": int(item_id),
-                "item_name": item_data["name"],
-                "from_position": {
-                    "width_cm": cargo_info["position"]["startCoordinates"]["width_cm"],
-                    "depth_cm": cargo_info["position"]["startCoordinates"]["depth_cm"],
-                    "height_cm": cargo_info["position"]["startCoordinates"]["height_cm"]
-                }
-            },
-            {
-                "step": 2,
                 "action": "retrieve",
                 "item_id": int(item_id),
-                "item_name": item_data["name"],
-                "from_position": {
-                    "width_cm": cargo_info["position"]["startCoordinates"]["width_cm"],
-                    "depth_cm": cargo_info["position"]["startCoordinates"]["depth_cm"],
-                    "height_cm": cargo_info["position"]["startCoordinates"]["height_cm"]
-                }
+                "from_position": self.cargo_data[item_id]["position"]["startCoordinates"]
             }
         ]

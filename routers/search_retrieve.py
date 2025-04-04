@@ -34,33 +34,47 @@ async def search_item(
     name: Optional[str] = Query(None)
 ):
     try:
+        # Load and validate required files
+        if not all(os.path.exists(file) for file in [items_file, containers_file, cargo_file]):
+            return SearchResponse(success=False, found=False)
+
         # Load all required data
         items_df = pl.read_csv(items_file)
         containers_df = pl.read_csv(containers_file)
         cargo_df = pl.read_csv(cargo_file)
-        
+
+        if items_df.is_empty() or containers_df.is_empty() or cargo_df.is_empty():
+            return SearchResponse(success=False, found=False)
+
         # Convert DataFrames to list of dicts
         items_data = items_df.to_dicts()
         containers_data = containers_df.to_dicts()
         cargo_data = cargo_df.to_dicts()
         
-        # Initialize search system with cargo data
+        # Initialize search system
         search_system = ItemSearchSystem(
             items_data=items_data,
             containers_data=containers_data,
-            cargo_data=cargo_data  # Add cargo data
+            cargo_data=cargo_data
         )
         
-        # Perform search
+        # Perform search based on input
         if item_id is not None:
             result = search_system.search_by_id(item_id)
         elif name is not None:
             result = search_system.search_by_name(name)
         else:
             raise HTTPException(status_code=400, detail="Either item_id or name must be provided")
+
+        # Handle search results
+        if not result["success"]:
+            return SearchResponse(success=False, found=False)
             
-        # Convert the result to SearchResponse format
-        if result["found"]:
+        if not result["found"]:
+            return SearchResponse(success=True, found=False)
+            
+        # Convert successful result to SearchResponse format
+        try:
             return SearchResponse(
                 success=True,
                 found=True,
@@ -74,11 +88,19 @@ async def search_item(
                         endCoordinates=Coordinates(**result["item"]["position"]["endCoordinates"])
                     )
                 ),
-                retrieval_steps=[RetrievalStep(**step) for step in result.get("retrieval_steps", [])]
+                retrieval_steps=[
+                    RetrievalStep(
+                        step=step["step"],
+                        action=step["action"],
+                        item_id=step["item_id"],
+                        from_position=Coordinates(**step["from_position"])
+                    ) for step in result.get("retrieval_steps", [])
+                ]
             )
-        else:
-            return SearchResponse(success=True, found=False)
-        
+        except Exception as e:
+            print(f"Error formatting response: {str(e)}")
+            return SearchResponse(success=False, found=False)
+            
     except Exception as e:
         print(f"Error in search endpoint: {str(e)}")
         import traceback

@@ -104,16 +104,20 @@ class RearrangementStep(BaseModel):
     to_container: Optional[str] = None
     to_position: Optional[Position] = None
 
+from pydantic import BaseModel, Field
+
 class Item(BaseModel):
     item_id: int
     name: str
-    width_cm: float
-    depth_cm: float
-    height_cm: float
+    width_cm: int
+    depth_cm: int
+    height_cm: int
+    mass_kg: float
     priority: int
-    expiry_date: Optional[str]
+    expiry_date: str
     usage_limit: int
     preferred_zone: str
+
 
 class Container(BaseModel):
     container_id: str

@@ -1,72 +1,123 @@
-from fastapi import APIRouter, HTTPException
-from schemas import CargoPlacementSystem, PlacementRequest, PlacementResponse
+from fastapi import APIRouter, HTTPException, Request
+from schemas import (
+    CargoPlacementSystem, 
+    PlacementRequest, 
+    PlacementResponse,
+    Item_for_search,
+    Position,
+    Coordinates
+)
 from algos.placement_algo import AdvancedCargoPlacement
 import polars as pl
-from typing import List, Dict
-import traceback
+from typing import List, Dict, Any
+from pydantic import BaseModel
 
 router = APIRouter(
     prefix="/api/placement",
     tags=["placement"],
 )
 
-@router.post("/", response_model=PlacementResponse)
-async def process_placement(request: PlacementRequest) -> PlacementResponse:
-    if not request.items or not request.containers:
-        raise HTTPException(status_code=400, detail="Items and containers must be provided.")
+class Item(BaseModel):
+    item_id: int
+    name: str
+    width_cm: float
+    depth_cm: float
+    height_cm: float
+    mass_kg: float
+    priority: int
+    preferred_zone: str
+    expiry_date: str
+    usage_limit: int
 
+class Container(BaseModel):
+    container_id: str
+    zone: str
+    width_cm: float
+    depth_cm: float
+    height_cm: float
+
+class PlacementInput(BaseModel):
+    items: List[Item]
+    containers: List[Container]
+
+def transform_input(input_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Transform input data to match the expected format for placement algorithm."""
+    transformed_items = []
+    for item in input_data["items"]:
+        # Create Coordinates for start and end positions
+        start_coords = {
+            "width_cm": 0,  # Initial position
+            "depth_cm": 0,
+            "height_cm": 0
+        }
+        end_coords = {
+            "width_cm": item["width_cm"],
+            "depth_cm": item["depth_cm"],
+            "height_cm": item["height_cm"]
+        }
+        
+        # Create Position
+        position = {
+            "startCoordinates": start_coords,
+            "endCoordinates": end_coords
+        }
+        
+        # Create transformed item
+        transformed_item = {
+            "item_id": item["item_id"],
+            "name": item["name"],
+            "width_cm": item["width_cm"],
+            "depth_cm": item["depth_cm"],
+            "height_cm": item["height_cm"],
+            "mass_kg": item.get("mass_kg", 0),  # Default to 0 if not provided
+            "priority": item["priority"],
+            "preferred_zone": item["preferred_zone"],
+            "expiry_date": item.get("expiry_date", ""),
+            "usage_limit": item.get("usage_limit", 0)
+        }
+        transformed_items.append(transformed_item)
+    
+    return transformed_items
+
+@router.post("/", response_model=PlacementResponse)
+async def process_placement(input_data: PlacementInput) -> PlacementResponse:
     try:
+        # Transform input data
+        transformed_items = transform_input(input_data.dict())
+
         placements = []
         rearrangements = []
 
         # Process each container separately
-        for container in request.containers:
-            print(f"Processing container {container.container_id} in zone {container.zone}")
+        for container in input_data.containers:
+            print(f"Processing container {container.container_id} for zone {container.zone}")
             
             # Initialize advanced placement algorithm for this container
             cargo_placer = AdvancedCargoPlacement({
-                "width_cm": float(container.width_cm),
-                "depth_cm": float(container.depth_cm),
-                "height_cm": float(container.height_cm)
+                "width_cm": container.width_cm,
+                "depth_cm": container.depth_cm,
+                "height_cm": container.height_cm
             })
 
-            # Convert items to the required format
-            container_items = []
-            for item in request.items:
-                if item.preferred_zone == container.zone:
-                    container_items.append({
-                        "item_id": str(item.item_id),  # Convert to string for consistency
-                        "name": item.name,
-                        "width_cm": float(item.width_cm),
-                        "depth_cm": float(item.depth_cm),
-                        "height_cm": float(item.height_cm),
-                        "priority": int(item.priority),
-                        "expiry_date": item.expiry_date if item.expiry_date else "",
-                        "usage_limit": int(item.usage_limit),
-                        "mass_kg": 0.0  # Default value if not provided
-                    })
-
+            # Get items assigned to this container's zone
+            container_items = [
+                item for item in transformed_items 
+                if item["preferred_zone"] == container.zone
+            ]
+            
             print(f"Found {len(container_items)} items for zone {container.zone}")
 
             if not container_items:
                 continue
 
             # Find optimal placement for items in this container
-            placement_results = cargo_placer.find_optimal_placement(container_items)
-            
-            # Convert results to API format
-            for placement in placement_results:
-                placements.append({
-                    "item_id": int(placement["item_id"]),  # Convert back to int
-                    "container_id": container.container_id,
-                    "zone": container.zone,
-                    "position": {
-                        "startCoordinates": placement["position"]["startCoordinates"],
-                        "endCoordinates": placement["position"]["endCoordinates"]
-                    }
-                })
+            container_placements = cargo_placer.find_optimal_placement(container_items)
+            print(f"Generated {len(container_placements)} placements for container {container.container_id}")
 
-            print(f"Generated {len(placement_results)} placements for container {container.container_id}")
+            # Add container ID to placements
+            for placement in container_placements:
+                placement["container_id"] = container.container_id
+                placements.append(placement)
 
         success = len(placements) > 0
         print(f"Placement complete. Success: {success}, Total placements: {len(placements)}")
@@ -79,5 +130,6 @@ async def process_placement(request: PlacementRequest) -> PlacementResponse:
 
     except Exception as e:
         print(f"Error in placement processing: {str(e)}")
+        import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
