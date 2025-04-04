@@ -148,26 +148,35 @@ async def retrieve_item(request: RetrieveItemRequest):
         cargo_file = "cargo_arrangement.csv"
         waste_file = "waste_items.csv"
 
+        # Check if required files exist
         if not all(os.path.exists(file) for file in [items_file, cargo_file, containers_file]):
-            return {"success": False}
+            print(f"Missing required files. Please ensure all files exist.")
+            return {"success": False, "error": "Required files missing"}
 
+        # Load CSV data
         items_df = pl.read_csv(items_file)
         cargo_df = pl.read_csv(cargo_file)
         containers_df = pl.read_csv(containers_file)
 
+        # Check if item exists in cargo
         item_in_cargo = cargo_df.filter(pl.col("item_id") == item_id)
         if item_in_cargo.is_empty():
             return {"success": False}
 
+        # Check if item exists in items database
         item_data = items_df.filter(pl.col("item_id") == item_id)
         if item_data.is_empty():
-            return {"success": False}
+            print(f"Item {item_id} not found in items database")
+            return {"success": False, "error": "Item not found in database"}
 
+        # Get zone and container information
         zone = item_in_cargo.select("zone")[0, 0]
         container_data = containers_df.filter(pl.col("zone") == zone)
         if container_data.is_empty():
+            print(f"No container found for zone {zone}")
             return {"success": False, "error": "Container not found"}
 
+        # Initialize retrieval algorithm with container dimensions
         container_dims = container_data.row(0, named=True)
         retriever = PriorityAStarRetrieval({
             "width_cm": float(container_dims["width_cm"]),
@@ -188,6 +197,9 @@ async def retrieve_item(request: RetrieveItemRequest):
             (pl.col("item_id") != item_id)
         )
 
+        # Ensure start position is unoccupied
+        retriever.occupied_spaces.discard(start_pos)
+
         for blocking_item in blocking_items.iter_rows(named=True):
             block_coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', blocking_item["coordinates"])
             if len(block_coords) >= 6:
@@ -196,35 +208,21 @@ async def retrieve_item(request: RetrieveItemRequest):
                 for x in range(x1, x2+1):
                     for y in range(y1, y2+1):
                         for z in range(z1, z2+1):
-                            retriever.occupied_spaces.add((x, y, z))
+                            pos = (x, y, z)
+                            # Don't add the start position to occupied spaces
+                            if pos != start_pos:
+                                retriever.occupied_spaces.add(pos)
 
         path = retriever.find_retrieval_path(start_pos, target_pos, str(item_id))
         if not path:
-            return {"success": False, "error": "No valid retrieval path found"}
+            return {"success": False}
 
-        retrieval_steps = []
-        for idx, step in enumerate(path.steps, 1):
-            retrieval_steps.append({
-                "step": idx,
-                "action": "move",
-                "item_id": item_id,
-                "from": {
-                    "x": step["from"][0],
-                    "y": step["from"][1],
-                    "z": step["from"][2]
-                },
-                "to": {
-                    "x": step["to"][0],
-                    "y": step["to"][1],
-                    "z": step["to"][2]
-                },
-                "priority": step["priority"]
-            })
-
+        # Check usage limit and update
         current_usage = int(items_df.filter(pl.col("item_id") == item_id).select("usage_limit")[0, 0])
         if current_usage <= 0:
             return {"success": False, "error": "Item has no uses left"}
 
+        # Update usage limit
         new_usage = current_usage - 1
         print(f"New usage limit for item {item_id}: {new_usage}")
 
@@ -235,22 +233,17 @@ async def retrieve_item(request: RetrieveItemRequest):
             .alias("usage_limit")
         )
 
+        # Write updated data
         updated_items_df.write_csv(items_file)
         log_retrieval(item_id, user_id, timestamp)
 
+        # Handle items with no uses left
         if new_usage == 0:
             print(f"Removing item {item_id} from cargo as it has 0 uses left")
             updated_cargo_df = cargo_df.filter(pl.col("item_id") != item_id)
             updated_cargo_df.write_csv(cargo_file)
 
-            zone = item_in_cargo.select("zone")[0, 0]
-            container_id_df = containers_df.filter(pl.col("zone") == zone)
-            if container_id_df.is_empty():
-                print("Error: No container found for the given zone.")
-                if new_usage == 0 and (item_id not in cargo_df["item_id"].to_list()):
-                    return {"success": False}
-
-            container_id = container_id_df.select("container_id")[0, 0]
+            container_id = container_data.select("container_id")[0, 0]
             position_data = item_in_cargo.select("coordinates")[0, 0]
 
             add_to_waste_items(
@@ -267,7 +260,7 @@ async def retrieve_item(request: RetrieveItemRequest):
         print(f"Error in retrieve endpoint: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return {"success": False}
+        return {"success": False, "error": str(e)}
 
 def add_to_waste_items(item_id, name, reason, container_id, position):
     waste_file = "waste_items.csv"
