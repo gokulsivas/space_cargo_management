@@ -3,3 +3,4 @@ fastapi
 pydantic
 typing
 python-multipart
+httpx
