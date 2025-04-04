@@ -334,11 +334,12 @@ async def place_item(request: PlaceItemRequest):
         container_info = container_data.row(0, named=True)
         zone = container_info["zone"]
 
-        position_str = str(request.position.model_dump())
-
-        start = request.position.startCoordinates
-        end = request.position.endCoordinates
-        coordinates_str = f"({start.width_cm},{start.depth_cm},{start.height_cm}),({end.width_cm},{end.depth_cm},{end.height_cm})"
+        # Get coordinates from the request's Position object
+        start_coords = request.position.startCoordinates
+        end_coords = request.position.endCoordinates
+        
+        # Create coordinate string in the expected format
+        coordinates_str = f"({start_coords.width_cm},{start_coords.depth_cm},{start_coords.height_cm}),({end_coords.width_cm},{end_coords.depth_cm},{end_coords.height_cm})"
 
         item_exists = not cargo_df.filter(pl.col("item_id") == request.item_id).is_empty()
 
@@ -346,6 +347,9 @@ async def place_item(request: PlaceItemRequest):
             (pl.col("zone") == zone) & 
             (pl.col("item_id") != request.item_id)
         )
+
+        print(f"Checking for overlaps in container {request.container_id} at zone {zone}")
+        print(f"New item position: start={start_coords}, end={end_coords}")
 
         overlapping = False
         for item in overlapping_items.iter_rows(named=True):
@@ -356,12 +360,20 @@ async def place_item(request: PlaceItemRequest):
             item_end = coordinates[1].split(",")
             item_end = (float(item_end[0]), float(item_end[1]), float(item_end[2]))
 
-            start = (start.width_cm, start.depth_cm, start.height_cm)
-            end = (end.width_cm, end.depth_cm, end.height_cm)
+            # Create tuples for comparison
+            start = (start_coords.width_cm, start_coords.depth_cm, start_coords.height_cm)
+            end = (end_coords.width_cm, end_coords.depth_cm, end_coords.height_cm)
 
-            if (start[0] < item_end[0] and end[0] > item_start[0] and 
-                start[1] < item_end[1] and end[1] > item_start[1] and 
-                start[2] < item_end[2] and end[2] > item_start[2]):
+            print(f"Checking against item {item['item_id']} at coordinates {item_coordinates}")
+            print(f"Item start: {item_start}, Item end: {item_end}")
+            print(f"New item start: {start}, New item end: {end}")
+
+            # Check if the new item's position overlaps with existing items
+            # Using inclusive inequalities to handle adjacent items correctly
+            if (start[0] <= item_end[0] and end[0] >= item_start[0] and 
+                start[1] <= item_end[1] and end[1] >= item_start[1] and 
+                start[2] <= item_end[2] and end[2] >= item_start[2]):
+                print(f"Overlap detected with item {item['item_id']} at coordinates {item_coordinates}")
                 overlapping = True
                 break
 
