@@ -114,9 +114,9 @@ class Item(BaseModel):
     height_cm: int
     mass_kg: float
     priority: int
-    expiry_date: str
-    usage_limit: int
     preferred_zone: str
+    expiry_date: Optional[str] = None
+    usage_limit: Optional[int] = None
 
 
 class Container(BaseModel):
@@ -346,9 +346,9 @@ class CargoArrangementExport(BaseModel):
     position: Coordinates
 
 class RetrieveItemRequest(BaseModel):
-    item_id: int = Field(..., description="Unique identifier for the item to retrieve")
-    user_id: str = Field(..., description="ID of the user retrieving the item")
-    timestamp: Optional[str] = Field(None, description="Timestamp of retrieval (ISO format)")
+    item_id: int
+    user_id: str
+    timestamp: Optional[str] = None
 
 class RetrievalStep(BaseModel):
     step: int
@@ -363,11 +363,10 @@ class SearchResponse(BaseModel):
     retrieval_steps: List[RetrievalStep] = []
 
 class PlaceItemRequest(BaseModel):
-    item_id: int = Field(..., description="Unique identifier for the item")
-    user_id: str = Field(..., description="ID of the user placing the item")
-    timestamp: Optional[str] = Field(None, description="Timestamp of placement (ISO format)")
-    container_id: str = Field(..., description="Container where the item is kept")
-    position: Position = Field(..., description="Position coordinates of the item")
+    item_id: int
+    container_id: str
+    position: Position
+    timestamp: Optional[str] = None
 
 class PlaceItemResponse(BaseModel):
     success: bool
@@ -376,6 +375,7 @@ class ReturnPlanRequest(BaseModel):
     undocking_container_id: str
     undocking_date: str
     max_weight: float
+    max_volume: float
 
 class CompleteUndockingRequest(BaseModel):
     undocking_container_id: str
