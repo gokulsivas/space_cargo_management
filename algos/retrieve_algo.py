@@ -26,11 +26,21 @@ class RetrievalPath:
     safety_score: float
 
 class PriorityAStarRetrieval:
-    def __init__(self, container_dims: Dict[str, float]):
-        self.width = int(container_dims["width"])
-        self.depth = int(container_dims["depth"])
-        self.height = int(container_dims["height"])
+    def __init__(self, container_dims: dict):
+        """Initialize with container dimensions"""
+        self.width_cm = int(container_dims["width_cm"])
+        self.depth_cm = int(container_dims["depth_cm"])
+        self.height_cm = int(container_dims["height_cm"])
+        
+        # Initialize occupied spaces set
         self.occupied_spaces = set()
+        
+        # Initialize priority queue for A* search
+        self.priority_queue = []
+        
+        # Initialize visited nodes set
+        self.visited = set()
+        
         self.items_data = {}
         # Pre-compute direction vectors for neighbor calculation
         self.directions = [(0,0,1), (0,0,-1), (0,1,0), (0,-1,0), (1,0,0), (-1,0,0)]
@@ -42,7 +52,7 @@ class PriorityAStarRetrieval:
             # Using Polars' lazy evaluation for better performance
             items_df = pl.scan_csv("imported_items.csv").collect()
             self.items_data = {
-                str(row["itemId"]): row 
+                str(row["item_id"]): row 
                 for row in items_df.to_dicts()
             }
         except Exception as e:
@@ -61,9 +71,9 @@ class PriorityAStarRetrieval:
 
         # Expiry date factor
         expiry_score = 1.0
-        if "expiryDate" in item and item["expiryDate"]:
+        if "expiry_date" in item and item["expiry_date"]:
             try:
-                expiry = datetime.strptime(item["expiryDate"], "%d-%m-%y")
+                expiry = datetime.strptime(item["expiry_date"], "%d-%m-%y")
                 days_until_expiry = (expiry - datetime.now()).days
                 # Higher priority for items expiring sooner
                 expiry_score = max(0.1, min(1.0, 1 - (days_until_expiry / 365)))
@@ -73,9 +83,9 @@ class PriorityAStarRetrieval:
 
         # Usage limit factor
         usage_score = 0.5
-        if "usageLimit" in item and item["usageLimit"] is not None:
+        if "usage_limit" in item and item["usage_limit"] is not None:
             try:
-                usage_score = max(0.1, min(1.0, float(item["usageLimit"]) / 10))
+                usage_score = max(0.1, min(1.0, float(item["usage_limit"]) / 10))
             except (ValueError, TypeError):
                 # Handle invalid usage limit values
                 pass
@@ -104,9 +114,9 @@ class PriorityAStarRetrieval:
         for dx, dy, dz in self.directions:
             new_x, new_y, new_z = x + dx, y + dy, z + dz
             # Bounds checking first (faster than creating tuple then checking)
-            if (0 <= new_x < self.width and 
-                0 <= new_y < self.depth and 
-                0 <= new_z < self.height):
+            if (0 <= new_x < self.width_cm and 
+                0 <= new_y < self.depth_cm and 
+                0 <= new_z < self.height_cm):
                 new_pos = (new_x, new_y, new_z)
                 if new_pos not in self.occupied_spaces:
                     neighbors_append(new_pos)
@@ -116,15 +126,20 @@ class PriorityAStarRetrieval:
     def is_valid_position(self, pos: Tuple[int, int, int]) -> bool:
         """Check if position is valid and unoccupied"""
         x, y, z = pos
-        return (0 <= x < self.width and
-                0 <= y < self.depth and
-                0 <= z < self.height and
+        return (0 <= x < self.width_cm and
+                0 <= y < self.depth_cm and
+                0 <= z < self.height_cm and
                 pos not in self.occupied_spaces)
 
     def find_retrieval_path(self, start_pos: Tuple[int, int, int], 
                            target_pos: Tuple[int, int, int],
                            item_id: str) -> Optional[RetrievalPath]:
         """Find optimal retrieval path using A* with priority considerations"""
+        # Validate positions
+        if not self.is_valid_position(start_pos) or not self.is_valid_position(target_pos):
+            print(f"Invalid positions - start: {start_pos}, target: {target_pos}")
+            return None
+
         # Using priority queue instead of set + min search
         open_pq = []
         open_set = set([start_pos])
@@ -159,7 +174,9 @@ class PriorityAStarRetrieval:
             if current_pos == target_pos:
                 return self.reconstruct_path(current, item_id)
             
-            open_set.remove(current_pos)
+            # Safely remove from open_set if it exists
+            if current_pos in open_set:
+                open_set.remove(current_pos)
             closed_set.add(current_pos)
             
             for neighbor_pos in self.get_neighbors(current_pos):
@@ -206,7 +223,7 @@ class PriorityAStarRetrieval:
             path.append({
                 "from": current.parent.position,
                 "to": current.position,
-                "itemId": item_id,
+                "item_id": item_id,
                 "priority": self.calculate_priority_score(item_id)
             })
             current = current.parent
@@ -234,7 +251,7 @@ class PriorityAStarRetrieval:
             # Extract required parameters from request
             start_position = tuple(request_data.get("startPosition", (0, 0, 0)))
             target_position = tuple(request_data.get("targetPosition"))
-            item_id = request_data.get("itemId")
+            item_id = request_data.get("item_id")
             
             # Update occupied spaces if provided
             if "occupiedSpaces" in request_data:
