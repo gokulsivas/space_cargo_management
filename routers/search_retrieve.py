@@ -15,7 +15,7 @@ from schemas import (
 )
 import datetime
 import csv
-from algos.retrieve_algo import PriorityAStarRetrieval
+from algos.retrieve_algo import PriorityAStarRetrieval, RetrievalPath
 from algos.search_algo import ItemSearchSystem
 import numpy as np
 import pandas as pd
@@ -151,7 +151,7 @@ async def retrieve_item(request: RetrieveItemRequest):
         # Check if required files exist
         if not all(os.path.exists(file) for file in [items_file, cargo_file, containers_file]):
             print(f"Missing required files. Please ensure all files exist.")
-            return {"success": False, "error": "Required files missing"}
+            return {"success": False}
 
         # Load CSV data
         items_df = pl.read_csv(items_file)
@@ -167,14 +167,14 @@ async def retrieve_item(request: RetrieveItemRequest):
         item_data = items_df.filter(pl.col("item_id") == item_id)
         if item_data.is_empty():
             print(f"Item {item_id} not found in items database")
-            return {"success": False, "error": "Item not found in database"}
+            return {"success": False}
 
         # Get zone and container information
         zone = item_in_cargo.select("zone")[0, 0]
         container_data = containers_df.filter(pl.col("zone") == zone)
         if container_data.is_empty():
             print(f"No container found for zone {zone}")
-            return {"success": False, "error": "Container not found"}
+            return {"success": False}
 
         # Initialize retrieval algorithm with container dimensions
         container_dims = container_data.row(0, named=True)
@@ -184,43 +184,19 @@ async def retrieve_item(request: RetrieveItemRequest):
             "height_cm": float(container_dims["height_cm"])
         })
 
+        # Parse item coordinates
         coord_str = item_in_cargo.select("coordinates")[0, 0]
+        print(f"Item coordinates: {coord_str}")
         coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', coord_str)
+        
         if len(coords) < 6:
-            return {"success": False, "error": "Invalid coordinates"}
-
-        start_pos = (0, 0, 0)
-        target_pos = (int(float(coords[0])), int(float(coords[1])), int(float(coords[2])))
-
-        blocking_items = cargo_df.filter(
-            (pl.col("zone") == zone) & 
-            (pl.col("item_id") != item_id)
-        )
-
-        # Ensure start position is unoccupied
-        retriever.occupied_spaces.discard(start_pos)
-
-        for blocking_item in blocking_items.iter_rows(named=True):
-            block_coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', blocking_item["coordinates"])
-            if len(block_coords) >= 6:
-                x1, y1, z1 = map(lambda x: int(float(x)), block_coords[:3])
-                x2, y2, z2 = map(lambda x: int(float(x)), block_coords[3:6])
-                for x in range(x1, x2+1):
-                    for y in range(y1, y2+1):
-                        for z in range(z1, z2+1):
-                            pos = (x, y, z)
-                            # Don't add the start position to occupied spaces
-                            if pos != start_pos:
-                                retriever.occupied_spaces.add(pos)
-
-        path = retriever.find_retrieval_path(start_pos, target_pos, str(item_id))
-        if not path:
+            print(f"Invalid coordinates format: {coord_str}")
             return {"success": False}
 
         # Check usage limit and update
         current_usage = int(items_df.filter(pl.col("item_id") == item_id).select("usage_limit")[0, 0])
         if current_usage <= 0:
-            return {"success": False, "error": "Item has no uses left"}
+            return {"success": False}
 
         # Update usage limit
         new_usage = current_usage - 1
@@ -260,7 +236,7 @@ async def retrieve_item(request: RetrieveItemRequest):
         print(f"Error in retrieve endpoint: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return {"success": False, "error": str(e)}
+        return {"success": False}
 
 def add_to_waste_items(item_id, name, reason, container_id, position):
     waste_file = "waste_items.csv"
