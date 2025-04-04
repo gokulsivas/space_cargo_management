@@ -105,7 +105,7 @@ async def search_item(
                         action=step["action"],
                         item_id=step["item_id"],
                         item_name=step["item_name"]
-                    ) for step in result.get("retrieval_steps", [])
+                    ) for step in (result.get("retrieval_steps") or [])
                 ]
             )
             
