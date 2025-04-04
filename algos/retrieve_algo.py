@@ -28,6 +28,7 @@ class RetrievalPath:
 class PriorityAStarRetrieval:
     def __init__(self, container_dims: dict):
         """Initialize with container dimensions"""
+        # Convert dimensions to integers
         self.width_cm = int(container_dims["width_cm"])
         self.depth_cm = int(container_dims["depth_cm"])
         self.height_cm = int(container_dims["height_cm"])
@@ -123,18 +124,33 @@ class PriorityAStarRetrieval:
                     
         return neighbors
 
-    def is_valid_position(self, pos: Tuple[int, int, int]) -> bool:
+    def is_valid_position(self, pos: Tuple[float, float, float]) -> bool:
         """Check if position is valid and unoccupied"""
         x, y, z = pos
-        return (0 <= x < self.width_cm and
-                0 <= y < self.depth_cm and
-                0 <= z < self.height_cm and
-                pos not in self.occupied_spaces)
+        # Convert to integers for comparison with container dimensions
+        x_int = int(x)
+        y_int = int(y)
+        z_int = int(z)
+        
+        # Check if the position is within container bounds
+        if not (0 <= x_int <= self.width_cm and
+                0 <= y_int <= self.depth_cm and
+                0 <= z_int <= self.height_cm):
+            return False
+            
+        # Check if the position is occupied
+        # Convert to integer coordinates for occupied spaces check
+        pos_int = (x_int, y_int, z_int)
+        return pos_int not in self.occupied_spaces
 
-    def find_retrieval_path(self, start_pos: Tuple[int, int, int], 
-                           target_pos: Tuple[int, int, int],
+    def find_retrieval_path(self, start_pos: Tuple[float, float, float], 
+                           target_pos: Tuple[float, float, float],
                            item_id: str) -> Optional[RetrievalPath]:
         """Find optimal retrieval path using A* with priority considerations"""
+        # Convert positions to integers for path finding
+        start_pos_int = (int(start_pos[0]), int(start_pos[1]), int(start_pos[2]))
+        target_pos_int = (int(target_pos[0]), int(target_pos[1]), int(target_pos[2]))
+        
         # Validate positions
         if not self.is_valid_position(start_pos) or not self.is_valid_position(target_pos):
             print(f"Invalid positions - start: {start_pos}, target: {target_pos}")
@@ -142,15 +158,15 @@ class PriorityAStarRetrieval:
 
         # Using priority queue instead of set + min search
         open_pq = []
-        open_set = set([start_pos])
+        open_set = set([start_pos_int])
         closed_set = set()
         
         # Priority bonus for the target item
         priority_bonus = self.calculate_priority_score(item_id)
         
-        h_cost = self.manhattan_distance(start_pos, target_pos)
+        h_cost = self.manhattan_distance(start_pos_int, target_pos_int)
         start_node = RetrievalNode(
-            position=start_pos,
+            position=start_pos_int,
             g_cost=0,
             h_cost=h_cost,
             f_cost=h_cost,  # f_cost = g_cost + h_cost
@@ -158,7 +174,7 @@ class PriorityAStarRetrieval:
         )
         
         # Using dictionary for O(1) node lookups
-        nodes = {start_pos: start_node}
+        nodes = {start_pos_int: start_node}
         
         # Add start node to priority queue
         heapq.heappush(open_pq, start_node)
@@ -171,7 +187,7 @@ class PriorityAStarRetrieval:
             if current.f_cost - current.priority_bonus > nodes[current_pos].f_cost - nodes[current_pos].priority_bonus:
                 continue
                 
-            if current_pos == target_pos:
+            if current_pos == target_pos_int:
                 return self.reconstruct_path(current, item_id)
             
             # Safely remove from open_set if it exists
@@ -186,7 +202,7 @@ class PriorityAStarRetrieval:
                 g_cost = current.g_cost + 1  # Assuming uniform cost for movement
                 
                 if neighbor_pos not in open_set:
-                    h_cost = self.manhattan_distance(neighbor_pos, target_pos)
+                    h_cost = self.manhattan_distance(neighbor_pos, target_pos_int)
                     f_cost = g_cost + h_cost
                     
                     neighbor = RetrievalNode(
