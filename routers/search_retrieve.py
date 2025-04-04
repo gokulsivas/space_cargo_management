@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 import polars as pl
 import os
 import re
-from typing import Optional
+from typing import Optional, List
 from schemas import (
     Coordinates, 
     Position, 
@@ -18,6 +18,7 @@ import csv
 from algos.retrieve_algo import PriorityAStarRetrieval
 from algos.search_algo import ItemSearchSystem
 import numpy as np
+import pandas as pd
 
 router = APIRouter(
     prefix="/api",
@@ -31,11 +32,13 @@ containers_file = "imported_containers.csv"
 @router.get("/search", response_model=SearchResponse)
 async def search_item(
     item_id: Optional[int] = Query(None),
-    name: Optional[str] = Query(None)
+    name: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None, description="Optional user ID for logging purposes")
 ):
     try:
         # Load and validate required files
         if not all(os.path.exists(file) for file in [items_file, containers_file, cargo_file]):
+            print(f"Missing required files. Checking: {items_file}, {containers_file}, {cargo_file}")
             return SearchResponse(success=False, found=False)
 
         # Load all required data
@@ -44,6 +47,7 @@ async def search_item(
         cargo_df = pl.read_csv(cargo_file)
 
         if items_df.is_empty() or containers_df.is_empty() or cargo_df.is_empty():
+            print("One or more data files are empty")
             return SearchResponse(success=False, found=False)
 
         # Convert DataFrames to list of dicts
@@ -60,22 +64,29 @@ async def search_item(
         
         # Perform search based on input
         if item_id is not None:
+            print(f"Searching for item_id: {item_id}")
             result = search_system.search_by_id(item_id)
         elif name is not None:
+            print(f"Searching for name: {name}")
             result = search_system.search_by_name(name)
         else:
             raise HTTPException(status_code=400, detail="Either item_id or name must be provided")
 
         # Handle search results
         if not result["success"]:
+            print(f"Search unsuccessful: {result.get('message', 'Unknown error')}")
             return SearchResponse(success=False, found=False)
             
         if not result["found"]:
+            print(f"Item not found: {result.get('message', 'Unknown reason')}")
             return SearchResponse(success=True, found=False)
             
         # Convert successful result to SearchResponse format
         try:
-            return SearchResponse(
+            print(f"Item found: {result['item']}")
+            
+            # Create the response
+            response = SearchResponse(
                 success=True,
                 found=True,
                 item=Item_for_search(
@@ -93,12 +104,27 @@ async def search_item(
                         step=step["step"],
                         action=step["action"],
                         item_id=step["item_id"],
-                        from_position=Coordinates(**step["from_position"])
+                        item_name=step["item_name"]
                     ) for step in result.get("retrieval_steps", [])
                 ]
             )
+            
+            # Log the search if user_id is provided
+            if user_id:
+                from routers.logs import log_action
+                log_action(
+                    user_id=user_id,
+                    action_type="search",
+                    item_id=result["item"]["item_id"],
+                    details={"search_type": "id" if item_id else "name", "query": item_id or name}
+                )
+                
+            return response
+            
         except Exception as e:
             print(f"Error formatting response: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
             return SearchResponse(success=False, found=False)
             
     except Exception as e:
