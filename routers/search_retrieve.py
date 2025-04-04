@@ -146,17 +146,23 @@ async def retrieve_item(request: RetrieveItemRequest):
         items_file = "imported_items.csv"    
         containers_file = "imported_containers.csv"
         cargo_file = "cargo_arrangement.csv"
+        temp_cargo_file = "temp_cargo_arrangement.csv"
         waste_file = "waste_items.csv"
 
         # Check if required files exist
-        if not all(os.path.exists(file) for file in [items_file, cargo_file, containers_file]):
+        if not os.path.exists(items_file) or not os.path.exists(containers_file):
             print(f"Missing required files. Please ensure all files exist.")
             return {"success": False}
 
+        # For retrieval, we'll prefer the temp cargo file if it exists, as it maintains original usage limits
+        cargo_read_file = temp_cargo_file if os.path.exists(temp_cargo_file) else cargo_file
+
         # Load CSV data
         items_df = pl.read_csv(items_file)
-        cargo_df = pl.read_csv(cargo_file)
+        cargo_df = pl.read_csv(cargo_read_file)
         containers_df = pl.read_csv(containers_file)
+        
+        print(f"Reading cargo data from: {cargo_read_file}")
 
         # Check if item exists in cargo
         item_in_cargo = cargo_df.filter(pl.col("item_id") == item_id)
@@ -198,7 +204,7 @@ async def retrieve_item(request: RetrieveItemRequest):
         if current_usage <= 0:
             return {"success": False}
 
-        # Update usage limit
+        # Update usage limit in the items file
         new_usage = current_usage - 1
         print(f"New usage limit for item {item_id}: {new_usage}")
 
@@ -209,14 +215,16 @@ async def retrieve_item(request: RetrieveItemRequest):
             .alias("usage_limit")
         )
 
-        # Write updated data
+        # Write updated items data
         updated_items_df.write_csv(items_file)
         log_retrieval(item_id, user_id, timestamp)
 
-        # Handle items with no uses left
+        # Handle items with no uses left - only update the main cargo file
         if new_usage == 0:
-            print(f"Removing item {item_id} from cargo as it has 0 uses left")
-            updated_cargo_df = cargo_df.filter(pl.col("item_id") != item_id)
+            print(f"Removing item {item_id} from main cargo file as it has 0 uses left")
+            # Load the main cargo file for updating
+            main_cargo_df = pl.read_csv(cargo_file)
+            updated_cargo_df = main_cargo_df.filter(pl.col("item_id") != item_id)
             updated_cargo_df.write_csv(cargo_file)
 
             container_id = container_data.select("container_id")[0, 0]
@@ -283,6 +291,7 @@ async def place_item(request: PlaceItemRequest):
             request.timestamp = datetime.datetime.now().isoformat()
 
         cargo_file = "cargo_arrangement.csv"
+        temp_cargo_file = "temp_cargo_arrangement.csv"
         containers_file = "imported_containers.csv"
 
         if not os.path.exists(cargo_file) or not os.path.exists(containers_file):
@@ -350,8 +359,10 @@ async def place_item(request: PlaceItemRequest):
             print(f"Cannot place item {request.item_id} in container {request.container_id} due to overlap")
             return {"success": False}
 
+        # Update the main cargo arrangement file
         if item_exists:
-            cargo_df = cargo_df.with_columns([
+            # For the main cargo file
+            updated_cargo_df = cargo_df.with_columns([
                 pl.when(pl.col("item_id") == request.item_id)
                   .then(pl.lit(zone))
                   .otherwise(pl.col("zone"))
@@ -361,15 +372,54 @@ async def place_item(request: PlaceItemRequest):
                   .otherwise(pl.col("coordinates"))
                   .alias("coordinates")
             ])
+            updated_cargo_df.write_csv(cargo_file)
         else:
             new_row = pl.DataFrame({
                 "item_id": [request.item_id],
                 "zone": [zone],
                 "coordinates": [coordinates_str]
             })
-            cargo_df = pl.concat([cargo_df, new_row])
+            updated_cargo_df = pl.concat([cargo_df, new_row])
+            updated_cargo_df.write_csv(cargo_file)
+        
+        # Also update the temp cargo arrangement file if it exists
+        if os.path.exists(temp_cargo_file):
+            try:
+                temp_cargo_df = pl.read_csv(temp_cargo_file)
+                temp_item_exists = not temp_cargo_df.filter(pl.col("item_id") == request.item_id).is_empty()
+                
+                if temp_item_exists:
+                    # Update existing item in temp file
+                    updated_temp_df = temp_cargo_df.with_columns([
+                        pl.when(pl.col("item_id") == request.item_id)
+                          .then(pl.lit(zone))
+                          .otherwise(pl.col("zone"))
+                          .alias("zone"),
+                        pl.when(pl.col("item_id") == request.item_id)
+                          .then(pl.lit(coordinates_str))
+                          .otherwise(pl.col("coordinates"))
+                          .alias("coordinates")
+                    ])
+                    updated_temp_df.write_csv(temp_cargo_file)
+                else:
+                    # Add new item to temp file
+                    new_row = pl.DataFrame({
+                        "item_id": [request.item_id],
+                        "zone": [zone],
+                        "coordinates": [coordinates_str]
+                    })
+                    updated_temp_df = pl.concat([temp_cargo_df, new_row])
+                    updated_temp_df.write_csv(temp_cargo_file)
+                
+                print(f"Updated both {cargo_file} and {temp_cargo_file}")
+            except Exception as e:
+                print(f"Error updating temp cargo file: {str(e)}")
+                print(f"Only updated the main cargo file")
+        else:
+            # Just copy the main file to the temp file
+            updated_cargo_df.write_csv(temp_cargo_file)
+            print(f"Created new {temp_cargo_file} as a copy of {cargo_file}")
 
-        cargo_df.write_csv(cargo_file)
         return {"success": True}
 
     except Exception as e:
