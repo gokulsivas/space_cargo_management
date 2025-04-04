@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Response
 from schemas import CargoPlacementSystem, ImportItemsResponse, ImportContainersResponse, CargoArrangementExport, Coordinates
 import polars as pl
 import json
+import os
 
 router = APIRouter(
     prefix="/api",
@@ -229,6 +230,35 @@ async def export_arrangement():
     try:
         print("\n=== Starting Export Process ===")
         
+        # If cargo_system is empty, try to load from CSV files directly
+        if cargo_system.items_df.is_empty():
+            print("Cargo system items are empty. Attempting to load from CSV files...")
+            if os.path.exists("imported_items.csv"):
+                items_df = pl.read_csv("imported_items.csv")
+                if not items_df.is_empty():
+                    print(f"Loaded {len(items_df)} items from imported_items.csv")
+                    cargo_system.items_df = items_df
+                else:
+                    print("Error: imported_items.csv exists but is empty")
+                    raise HTTPException(status_code=400, detail="No items loaded")
+            else:
+                print("Error: imported_items.csv does not exist")
+                raise HTTPException(status_code=400, detail="No items loaded")
+            
+        if cargo_system.containers_df.is_empty():
+            print("Cargo system containers are empty. Attempting to load from CSV files...")
+            if os.path.exists("imported_containers.csv"):
+                containers_df = pl.read_csv("imported_containers.csv")
+                if not containers_df.is_empty():
+                    print(f"Loaded {len(containers_df)} containers from imported_containers.csv")
+                    cargo_system.containers_df = containers_df
+                else:
+                    print("Error: imported_containers.csv exists but is empty")
+                    raise HTTPException(status_code=400, detail="No containers loaded")
+            else:
+                print("Error: imported_containers.csv does not exist")
+                raise HTTPException(status_code=400, detail="No containers loaded")
+        
         # Verify data is loaded
         if cargo_system.items_df.is_empty():
             print("Error: No items loaded")
@@ -317,6 +347,7 @@ async def export_arrangement():
         
         # Create and save the cargo_arrangement.csv file
         arrangement_csv_path = "cargo_arrangement.csv"
+        temp_arrangement_csv_path = "temp_cargo_arrangement.csv"
         
         with open(arrangement_csv_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
@@ -324,6 +355,18 @@ async def export_arrangement():
             
             for placement in placements:
                 writer.writerow([
+                    placement["item_id"],
+                    placement["zone"],
+                    placement["container_id"],
+                    f"({round(placement['start_x_cm'], 2)},{round(placement['start_y_cm'], 2)},{round(placement['start_z_cm'], 2)}),"
+                    f"({round(placement['end_x_cm'], 2)},{round(placement['end_y_cm'], 2)},{round(placement['end_z_cm'], 2)})"
+                ])
+        with open(temp_arrangement_csv_path, 'w', newline='') as csvfile:
+            writert = csv.writer(csvfile)
+            writert.writerow(["item_id", "zone", "container_id", "coordinates"])
+            
+            for placement in placements:
+                writert.writerow([
                     placement["item_id"],
                     placement["zone"],
                     placement["container_id"],
