@@ -174,6 +174,10 @@ class ItemSearchSystem:
                         "priority": item_priority
                     })
         
+        # If no blocking items, return empty list (0 steps needed)
+        if not blocking_items:
+            return []
+        
         # Sort blocking items by priority (highest first) and then by depth (closest to target first)
         blocking_items.sort(key=lambda x: (-x["priority"], x["position"]["endCoordinates"]["depth_cm"]))
         
@@ -181,29 +185,11 @@ class ItemSearchSystem:
         steps = []
         step_number = 1
         
-        # If no blocking items, item can be directly retrieved
-        if not blocking_items:
-            steps.append({
-                "step": step_number,
-                "action": "retrieve",
-                "item_id": target_item_id,
-                "item_name": self.items_data[target_item_id]["name"]
-            })
-            return steps
-        
         # Remove blocking items
         for item in blocking_items:
             steps.append({
                 "step": step_number,
                 "action": "remove",
-                "item_id": item["item_id"],
-                "item_name": item["name"]
-            })
-            step_number += 1
-            
-            steps.append({
-                "step": step_number,
-                "action": "setAside",
                 "item_id": item["item_id"],
                 "item_name": item["name"]
             })
@@ -218,11 +204,12 @@ class ItemSearchSystem:
         })
         step_number += 1
         
-        # Place back blocking items in reverse order
-        for item in reversed(blocking_items):
+        # Place back blocking items in order of priority (highest priority first)
+        blocking_items.sort(key=lambda x: -x["priority"])  # Sort by priority only
+        for item in blocking_items:
             steps.append({
                 "step": step_number,
-                "action": "placeBack",
+                "action": "place",
                 "item_id": item["item_id"],
                 "item_name": item["name"]
             })
