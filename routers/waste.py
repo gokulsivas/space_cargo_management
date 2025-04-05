@@ -153,12 +153,33 @@ async def identify_waste():
             imported_df = pl.read_csv(imported_file)
             if "expiry_date" in imported_df.columns:
                 current_date = datetime.now().date()
-                # Filter rows where expiry_date (formatted as DD-MM-YY) is before the current date
-                expired_df = imported_df.filter(
-                    pl.col("expiry_date").str.strptime(pl.Date, format="%d-%m-%y") < current_date
-                )
+                print(f"Current date: {current_date}")
+                
+                # Try parsing dates in both formats using Polars
+                # First try YYYY-MM-DD format
+                try:
+                    expired_df = imported_df.filter(
+                        (pl.col("expiry_date").is_not_null()) & 
+                        (pl.col("expiry_date").str.len_chars() > 0) &
+                        (pl.col("expiry_date").str.strptime(pl.Date, format="%Y-%m-%d", strict=False) < current_date)
+                    )
+                except Exception as e:
+                    print(f"Error parsing YYYY-MM-DD format: {str(e)}")
+                    # If that fails, try DD-MM-YY format
+                    try:
+                        expired_df = imported_df.filter(
+                            (pl.col("expiry_date").is_not_null()) & 
+                            (pl.col("expiry_date").str.len_chars() > 0) &
+                            (pl.col("expiry_date").str.strptime(pl.Date, format="%d-%m-%y", strict=False) < current_date)
+                        )
+                    except Exception as e:
+                        print(f"Error parsing DD-MM-YY format: {str(e)}")
+                        expired_df = pl.DataFrame()  # Empty DataFrame if both formats fail
+                
+                print(f"Found {len(expired_df)} items with expired dates")
                 
                 for item in expired_df.to_dicts():
+                    print(f"Processing expired item: {item}")
                     # Lookup container_id from cargo_arrangement.csv first
                     container_id = ""
                     position_str = "(0,0,0),(0,0,0)"  # Default value for CSV
@@ -264,27 +285,38 @@ async def identify_waste():
                     
                     # Only add to waste items if not already there
                     if not any(w["item_id"] == expired_item["item_id"] for w in waste_items):
+                        print(f"Adding expired item to waste items: {expired_item}")
                         waste_items.append(expired_item)
                         new_waste_items.append(csv_item)
                         
             # Now append the new waste items to waste_items.csv
             if new_waste_items:
+                print(f"Appending {len(new_waste_items)} new waste items to waste_items.csv")
                 # Create the DataFrame with new waste items
                 new_waste_df = pl.DataFrame(new_waste_items)
+                print(f"New waste items DataFrame: {new_waste_df}")
                 
                 # If the waste file exists, append to it, otherwise create it
                 if os.path.exists(waste_file):
+                    print(f"Reading existing waste_items.csv")
                     # Read existing file
                     try:
                         existing_waste_df = pl.read_csv(waste_file)
+                        print(f"Existing waste items: {existing_waste_df}")
                         # Concatenate and write back
                         combined_df = pl.concat([existing_waste_df, new_waste_df])
+                        print(f"Combined DataFrame: {combined_df}")
                         combined_df.write_csv(waste_file)
+                        print("Successfully wrote to waste_items.csv")
                     except Exception as e:
                         print(f"Error appending to waste_items.csv: {str(e)}")
+                        print(f"Error type: {type(e)}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
                         # If error reading, just write the new items
                         new_waste_df.write_csv(waste_file)
                 else:
+                    print("Creating new waste_items.csv")
                     # Create new file with waste items
                     new_waste_df.write_csv(waste_file)
                     
