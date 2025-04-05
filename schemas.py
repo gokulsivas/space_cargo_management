@@ -400,13 +400,13 @@ class WasteItemRequest(BaseModel):
 
 class ReturnPlanStep(BaseModel):
     step: int
-    itemId: str
+    item_id: str
     itemName: str
     fromContainer: str
     toContainer: str
 
 class ReturnItem(BaseModel):
-    itemId: str
+    item_id: str
     name: str
     reason: str
 

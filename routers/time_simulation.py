@@ -11,7 +11,7 @@ router = APIRouter(
 )
 
 class ItemUsage(BaseModel):
-    itemId: Optional[int]
+    item_id: Optional[int]
     name: Optional[str]
 
 class TimeSimulationRequest(BaseModel):
@@ -31,7 +31,19 @@ async def simulate_day(request: TimeSimulationRequest):
             raise HTTPException(status_code=404, detail="Imported items data not found")
         
         items_df = pl.read_csv("imported_items.csv")
+        print(f"Initial DataFrame columns: {items_df.columns}")
+        print(f"Sample of expiry dates: {items_df.select('expiry_date').head(5)}")
+
         current_date = datetime.now()
+        print(f"Current date: {current_date}")
+
+        # Validate expiry dates in the DataFrame
+        items_df = items_df.with_columns([
+            pl.when(pl.col("expiry_date").is_null() | (pl.col("expiry_date") == ""))
+            .then(None)
+            .otherwise(pl.col("expiry_date"))
+            .alias("expiry_date")
+        ])
 
         # Calculate target date
         if request.toTimestamp:
@@ -50,15 +62,36 @@ async def simulate_day(request: TimeSimulationRequest):
         items_depleted_today = []
 
         # Process each day of simulation
-        for _ in range(days_to_simulate):
+        for day in range(days_to_simulate):
             current_date += timedelta(days=1)
+            #print(f"\nProcessing day {day + 1}, date: {current_date}")
+            
+            # Check for expired items first
+            for item in items_df.to_dicts():
+                if item["expiry_date"]:
+                    try:
+                        # Parse ISO format date (YYYY-MM-DD)
+                        expiry_date = parse_expiry_date(item["expiry_date"])
+                        #print(f"Checking item {item['item_id']} ({item['name']}) - Expiry: {expiry_date}, Current: {current_date}")
+                        if expiry_date.date() <= current_date.date():
+                            print(f"Item {item['item_id']} ({item['name']}) has expired!")
+                            items_expired.append({
+                                "item_id": item["item_id"],
+                                "name": item["name"]
+                            })
+                            # Remove expired items from DataFrame
+                            items_df = items_df.filter(pl.col("item_id") != item["item_id"])
+                            continue  # Skip processing this item for usage
+                    except ValueError as e:
+                        print(f"Error parsing expiry date for item {item['item_id']}: {str(e)}")
+                        continue
             
             # Process items to be used each day
             for item_usage in request.itemsToBeUsedPerDay:
                 # Find matching item
                 filter_expr = []
-                if item_usage.itemId:
-                    filter_expr.append(pl.col("itemId") == item_usage.itemId)
+                if item_usage.item_id:
+                    filter_expr.append(pl.col("item_id") == item_usage.item_id)
                 if item_usage.name:
                     filter_expr.append(pl.col("name") == item_usage.name)
                 
@@ -68,20 +101,20 @@ async def simulate_day(request: TimeSimulationRequest):
                 matching_items = items_df.filter(pl.any_horizontal(filter_expr))
                 
                 for item in matching_items.to_dicts():
-                    current_uses = int(item["usageLimit"])
+                    current_uses = int(item["usage_limit"])
                     new_uses = max(0, current_uses - 1)
                     
                     # Update usage limit in DataFrame
                     items_df = items_df.with_columns([
-                        pl.when(pl.col("itemId") == item["itemId"])
+                        pl.when(pl.col("item_id") == item["item_id"])
                         .then(new_uses)
-                        .otherwise(pl.col("usageLimit"))
-                        .alias("usageLimit")
+                        .otherwise(pl.col("usage_limit"))
+                        .alias("usage_limit")
                     ])
                     
                     # Track used items
                     items_used.append({
-                        "itemId": item["itemId"],
+                        "item_id": item["item_id"],
                         "name": item["name"],
                         "remainingUses": new_uses
                     })
@@ -89,26 +122,9 @@ async def simulate_day(request: TimeSimulationRequest):
                     # Check if item is depleted
                     if current_uses > 0 and new_uses == 0:
                         items_depleted_today.append({
-                            "itemId": item["itemId"],
+                            "item_id": item["item_id"],
                             "name": item["name"]
                         })
-
-            # Check for expired items
-            for item in items_df.to_dicts():
-                if item["expiryDate"]:
-                    try:
-                        # Parse ISO format date (YYYY-MM-DD)
-                        expiry_date = datetime.fromisoformat(item["expiryDate"])
-                        if expiry_date <= current_date:
-                            items_expired.append({
-                                "itemId": item["itemId"],
-                                "name": item["name"]
-                            })
-                            # Remove expired items from DataFrame
-                            items_df = items_df.filter(pl.col("itemId") != item["itemId"])
-                    except ValueError as e:
-                        print(f"Error parsing expiry date for item {item['itemId']}: {str(e)}")
-                        continue
 
         # Save updated items back to CSV
         items_df.write_csv("temp_imported_items.csv")
@@ -128,3 +144,20 @@ async def simulate_day(request: TimeSimulationRequest):
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+def parse_expiry_date(date_str: str) -> datetime:
+    """Parse date string in either YYYY-MM-DD or DD-MM-YY format to datetime object."""
+    try:
+        # Try parsing as YYYY-MM-DD first
+        try:
+            return datetime.fromisoformat(date_str)
+        except ValueError:
+            # If that fails, try DD-MM-YY format
+            day, month, year = date_str.split('-')
+            # Convert 2-digit year to 4-digit year (assuming 20xx)
+            if len(year) == 2:
+                year = f"20{year}"
+            # Create datetime object
+            return datetime(int(year), int(month), int(day))
+    except Exception as e:
+        raise ValueError(f"Invalid date format: {date_str}")
