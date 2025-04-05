@@ -634,17 +634,18 @@ def calculate_retrieval_steps(item_id: int, container_id: str, cargo_df: pl.Data
 
 # Response models
 class ReturnManifest(BaseModel):
-    totalVolume: float = 0
-    totalWeight: float = 0
-    undockingContainerId: Optional[str] = None
-    undockingDate: Optional[str] = None
+    undocking_container_id: str
+    undocking_date: str
+    return_items: List[ReturnItem]
+    total_volume: float
+    total_weight: float
 
 class ReturnPlanResponse(BaseModel):
     success: bool
     error: Optional[str] = None
-    returnPlan: List[Dict] = Field(default_factory=list)
-    retrievalSteps: List[Dict] = Field(default_factory=list)
-    returnManifest: ReturnManifest = Field(default_factory=ReturnManifest)
+    return_plan: List[ReturnPlanStep] = Field(default_factory=list)
+    retrieval_steps: List[RetrievalStep] = Field(default_factory=list)
+    return_manifest: ReturnManifest
 
 @router.post("/return-plan", response_model=ReturnPlanResponse)
 async def generate_return_plan(request: ReturnPlanRequest):
@@ -654,9 +655,9 @@ async def generate_return_plan(request: ReturnPlanRequest):
         print(f"Request: {request}")
         
         # Extract request data
-        undocking_container_id = request.undockingContainerId
-        undocking_date = request.undockingDate
-        max_weight = float(request.maxWeight) if request.maxWeight else float('inf')
+        undocking_container_id = request.undocking_container_id
+        undocking_date = request.undocking_date
+        max_weight = float(request.max_weight) if request.max_weight else float('inf')
         
         # Load waste items and imported items data using the functions from waste_algo.py
         waste_items = load_waste_items()  # Using default filename
@@ -677,13 +678,14 @@ async def generate_return_plan(request: ReturnPlanRequest):
             print(f"No items found in container {undocking_container_id}")
             return ReturnPlanResponse(
                 success=True,
-                returnPlan=[],
-                retrievalSteps=[],
-                returnManifest=ReturnManifest(
-                    totalVolume=0,
-                    totalWeight=0,
-                    undockingContainerId=undocking_container_id,
-                    undockingDate=undocking_date
+                return_plan=[],
+                retrieval_steps=[],
+                return_manifest=ReturnManifest(
+                    undocking_container_id=undocking_container_id,
+                    undocking_date=undocking_date,
+                    return_items=[],
+                    total_volume=0,
+                    total_weight=0
                 )
             )
         
@@ -696,6 +698,27 @@ async def generate_return_plan(request: ReturnPlanRequest):
         print(f"Generated {len(return_plan)} return plan steps")
         print(f"Generated {len(retrieval_steps)} retrieval steps")
         
+        # Convert return plan steps to ReturnPlanStep objects
+        return_plan_steps = []
+        for step in return_plan:
+            return_plan_steps.append(ReturnPlanStep(
+                step=step["step"],
+                item_id=str(step["itemId"]),
+                item_name=step["itemName"],
+                from_container=step["fromContainer"],
+                to_container=step["toContainer"]
+            ))
+        
+        # Convert retrieval steps to RetrievalStep objects
+        retrieval_step_objects = []
+        for step in retrieval_steps:
+            retrieval_step_objects.append(RetrievalStep(
+                step=step["step"],
+                action=step["action"],
+                item_id=int(step["itemId"]),
+                item_name=step["itemName"]
+            ))
+        
         # Create return manifest
         return_manifest = create_return_manifest(
             selected_items, 
@@ -705,15 +728,25 @@ async def generate_return_plan(request: ReturnPlanRequest):
         )
         print(f"Created return manifest with {len(return_manifest['returnItems'])} items")
         
+        # Convert return items to ReturnItem objects
+        return_items = []
+        for item in return_manifest["returnItems"]:
+            return_items.append(ReturnItem(
+                item_id=str(item["itemId"]),
+                name=item["name"],
+                reason=item["reason"]
+            ))
+        
         return ReturnPlanResponse(
             success=True,
-            returnPlan=return_plan,
-            retrievalSteps=retrieval_steps,
-            returnManifest=ReturnManifest(
-                totalVolume=return_manifest["totalVolume"],
-                totalWeight=return_manifest["totalWeight"],
-                undockingContainerId=undocking_container_id,
-                undockingDate=undocking_date
+            return_plan=return_plan_steps,
+            retrieval_steps=retrieval_step_objects,
+            return_manifest=ReturnManifest(
+                undocking_container_id=undocking_container_id,
+                undocking_date=undocking_date,
+                return_items=return_items,
+                total_volume=return_manifest["totalVolume"],
+                total_weight=return_manifest["totalWeight"]
             )
         )
         
@@ -725,11 +758,14 @@ async def generate_return_plan(request: ReturnPlanRequest):
         return ReturnPlanResponse(
             success=False,
             error=str(e),
-            returnPlan=[],
-            retrievalSteps=[],
-            returnManifest=ReturnManifest(
-                undockingContainerId=request.undockingContainerId if request else None,
-                undockingDate=request.undockingDate if request else None
+            return_plan=[],
+            retrieval_steps=[],
+            return_manifest=ReturnManifest(
+                undocking_container_id=request.undocking_container_id if request else None,
+                undocking_date=request.undocking_date if request else None,
+                return_items=[],
+                total_volume=0,
+                total_weight=0
             )
         )
 
