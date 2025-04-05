@@ -372,9 +372,9 @@ class PlaceItemResponse(BaseModel):
     success: bool
 
 class ReturnPlanRequest(BaseModel):
-    undockingContainerId: str
-    undockingDate: str
-    maxWeight: float
+    undocking_container_id: str
+    undocking_date: str
+    max_weight: float
 
 class CompleteUndockingRequest(BaseModel):
     undocking_container_id: str
@@ -401,9 +401,9 @@ class WasteItemRequest(BaseModel):
 class ReturnPlanStep(BaseModel):
     step: int
     item_id: str
-    itemName: str
-    fromContainer: str
-    toContainer: str
+    item_name: str
+    from_container: str
+    to_container: str
 
 class ReturnItem(BaseModel):
     item_id: str
@@ -411,14 +411,14 @@ class ReturnItem(BaseModel):
     reason: str
 
 class ReturnManifest(BaseModel):
-    undockingContainerId: str
-    undockingDate: str
-    returnItems: List[ReturnItem]
-    totalVolume: float
-    totalWeight: float
+    undocking_container_id: str
+    undocking_date: str
+    return_items: List[ReturnItem]
+    total_volume: float
+    total_weight: float
 
 class ReturnPlanResponse(BaseModel):
     success: bool
-    returnPlan: List[ReturnPlanStep]
-    retrievalSteps: List[RetrievalStep]
-    returnManifest: ReturnManifest
+    return_plan: List[ReturnPlanStep]
+    retrieval_steps: List[RetrievalStep]
+    return_manifest: ReturnManifest
