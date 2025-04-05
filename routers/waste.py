@@ -10,6 +10,14 @@ from datetime import datetime
 from schemas import Position, ReturnPlanRequest, ReturnPlanResponse, ReturnItem, ReturnPlanStep, RetrievalStep, CompleteUndockingRequest, Object3D, ReturnManifest
 import httpx
 from algos.search_algo import ItemSearchSystem
+from algos.waste_algo import (
+    load_waste_items,
+    load_imported_items,
+    link_waste_with_imported_items,
+    select_waste_items_greedy,
+    generate_return_plan as generate_return_plan_steps,
+    create_return_manifest
+)
 
 router = APIRouter(
     prefix="/api/waste",
@@ -151,10 +159,136 @@ async def identify_waste():
     if os.path.exists(imported_file):
         try:
             imported_df = pl.read_csv(imported_file)
-            if "expiry_date" in imported_df.columns:
-                current_date = datetime.now().date()
-                print(f"Current date: {current_date}")
+            current_date = datetime.now().date()
+            print(f"Current date: {current_date}")
+            
+            # Check for items with usage_limit = 0
+            if "usage_limit" in imported_df.columns:
+                zero_usage_limit_df = imported_df.filter(
+                    (pl.col("usage_limit").is_not_null()) & 
+                    (pl.col("usage_limit") == 0)
+                )
                 
+                print(f"Found {len(zero_usage_limit_df)} items with usage_limit = 0")
+                
+                for item in zero_usage_limit_df.to_dicts():
+                    print(f"Processing item with usage_limit = 0: {item}")
+                    # Lookup container_id from cargo_arrangement.csv first
+                    container_id = ""
+                    position_str = "(0,0,0),(0,0,0)"  # Default value for CSV
+                    retrieval_steps = []
+                    # Initialize coordinates with default values
+                    coordinates = {
+                        "startCoordinates": {"width_cm": 0, "depth_cm": 0, "height_cm": 0},
+                        "endCoordinates": {"width_cm": 0, "depth_cm": 0, "height_cm": 0}
+                    }
+                    
+                    if os.path.exists("cargo_arrangement.csv"):
+                        try:
+                            cargo_df = pl.read_csv("cargo_arrangement.csv")
+                            # Fix: Cast both sides to string for comparison
+                            cargo_matching = cargo_df.filter(pl.col("item_id").cast(pl.Utf8) == str(item.get("item_id", ""))).to_dicts()
+                            if cargo_matching:
+                                container_id = str(cargo_matching[0].get("container_id", ""))
+                                pos_str = cargo_matching[0].get("coordinates", "")
+                                if pos_str:
+                                    coordinates = parse_position(pos_str)
+                                    position_str = pos_str
+                                    
+                                # Calculate retrieval steps
+                                items_in_container = cargo_df.filter(
+                                    (pl.col("container_id") == container_id) & 
+                                    (pl.col("item_id").cast(str) != str(item.get("item_id", "")))
+                                ).to_dicts()
+                                
+                                # Sort items by depth (front to back)
+                                items_in_container.sort(key=lambda x: float(x["coordinates"].split(",")[1]))
+                                
+                                step_number = 1
+                                
+                                # Remove blocking items (front to back)
+                                for blocking_item in items_in_container:
+                                    retrieval_steps.append({
+                                        "step": step_number,
+                                        "action": "remove",
+                                        "item_id": int(blocking_item["item_id"]),
+                                        "item_name": blocking_item["name"]
+                                    })
+                                    step_number += 1
+                                    
+                                # Retrieve target item
+                                retrieval_steps.append({
+                                    "step": step_number,
+                                    "action": "retrieve",
+                                    "item_id": int(item.get("item_id", "0")),
+                                    "item_name": item.get("name", "")
+                                })
+                                step_number += 1
+                                
+                                # Place back blocking items (back to front)
+                                for blocking_item in reversed(items_in_container):
+                                    retrieval_steps.append({
+                                        "step": step_number,
+                                        "action": "place",
+                                        "item_id": int(blocking_item["item_id"]),
+                                        "item_name": blocking_item["name"]
+                                    })
+                                    step_number += 1
+                        except Exception as e:
+                            print(f"Error reading cargo_arrangement.csv: {str(e)}")
+                    
+                    # Only if not found in cargo_arrangement.csv, try imported_containers.csv
+                    if not container_id and os.path.exists("imported_containers.csv"):
+                        try:
+                            containers_df = pl.read_csv("imported_containers.csv")
+                            # Assume imported_containers.csv has columns: container_id, zone, ...
+                            matching_container = containers_df.filter(pl.col("zone") == item.get("preferred_zone", "")).to_dicts()
+                            if matching_container:
+                                container_id = str(matching_container[0].get("container_id", ""))
+                        except Exception as e:
+                            print(f"Error reading imported_containers.csv: {str(e)}")
+                    
+                    # Fix: Ensure item_id is cast to int safely with default value
+                    try:
+                        item_id = int(item.get("item_id", "0"))
+                    except ValueError:
+                        item_id = 0
+                    
+                    # Create the formatted item for the API response
+                    position_model = Position(
+                        startCoordinates=coordinates.get("startCoordinates", {"width_cm": 0, "depth_cm": 0, "height_cm": 0}),
+                        endCoordinates=coordinates.get("endCoordinates", {"width_cm": 0, "depth_cm": 0, "height_cm": 0})
+                    )
+                    
+                    item_name = str(item.get("name", ""))
+                    
+                    zero_usage_item = {
+                        "item_id": item_id,
+                        "name": item_name,
+                        "reason": "Usage Limit is 0",
+                        "container_id": container_id,
+                        "position": position_model.dict(),
+                        "retrieval_steps": retrieval_steps
+                    }
+                    
+                    # Create a simple dictionary for CSV export
+                    csv_item = {
+                        "item_id": item_id,
+                        "name": item_name,
+                        "reason": "Usage Limit is 0",
+                        "container_id": container_id,
+                        "position": position_str,
+                        "retrieval_steps": json.dumps(retrieval_steps)
+                    }
+                    
+                    # Only add to waste items if not already there
+                    if not any(w["item_id"] == zero_usage_item["item_id"] for w in waste_items):
+                        print(f"Adding item with usage_limit = 0 to waste items: {zero_usage_item}")
+                        waste_items.append(zero_usage_item)
+                        new_waste_items.append(csv_item)
+            
+            # Check for expired dates
+            if "expiry_date" in imported_df.columns:
                 # Try parsing dates in both formats using Polars
                 # First try YYYY-MM-DD format
                 try:
@@ -184,6 +318,11 @@ async def identify_waste():
                     container_id = ""
                     position_str = "(0,0,0),(0,0,0)"  # Default value for CSV
                     retrieval_steps = []
+                    # Initialize coordinates with default values
+                    coordinates = {
+                        "startCoordinates": {"width_cm": 0, "depth_cm": 0, "height_cm": 0},
+                        "endCoordinates": {"width_cm": 0, "depth_cm": 0, "height_cm": 0}
+                    }
                     
                     if os.path.exists("cargo_arrangement.csv"):
                         try:
@@ -288,37 +427,57 @@ async def identify_waste():
                         print(f"Adding expired item to waste items: {expired_item}")
                         waste_items.append(expired_item)
                         new_waste_items.append(csv_item)
-                        
+            
             # Now append the new waste items to waste_items.csv
             if new_waste_items:
                 print(f"Appending {len(new_waste_items)} new waste items to waste_items.csv")
-                # Create the DataFrame with new waste items
-                new_waste_df = pl.DataFrame(new_waste_items)
-                print(f"New waste items DataFrame: {new_waste_df}")
                 
-                # If the waste file exists, append to it, otherwise create it
+                # If the waste file exists, read it and combine with new items
                 if os.path.exists(waste_file):
-                    print(f"Reading existing waste_items.csv")
-                    # Read existing file
                     try:
-                        existing_waste_df = pl.read_csv(waste_file)
-                        print(f"Existing waste items: {existing_waste_df}")
-                        # Concatenate and write back
-                        combined_df = pl.concat([existing_waste_df, new_waste_df])
-                        print(f"Combined DataFrame: {combined_df}")
-                        combined_df.write_csv(waste_file)
-                        print("Successfully wrote to waste_items.csv")
+                        # Read existing items
+                        existing_items = []
+                        with open(waste_file, 'r') as f:
+                            reader = csv.DictReader(f)
+                            existing_items = list(reader)
+                            print(f"Found {len(existing_items)} existing items in waste_items.csv")
+                        
+                        # Add new items that aren't already in the file
+                        existing_item_ids = {item['item_id'] for item in existing_items}
+                        new_items_added = 0
+                        for new_item in new_waste_items:
+                            if str(new_item['item_id']) not in existing_item_ids:
+                                existing_items.append(new_item)
+                                new_items_added += 1
+                        
+                        print(f"Adding {new_items_added} new items to waste_items.csv")
+                        
+                        # Write all items back to the file
+                        with open(waste_file, 'w', newline='') as f:
+                            writer = csv.DictWriter(f, fieldnames=['item_id', 'name', 'reason', 'container_id', 'position', 'retrieval_steps'])
+                            writer.writeheader()
+                            writer.writerows(existing_items)
+                        
+                        print(f"Successfully wrote {len(existing_items)} items to waste_items.csv")
                     except Exception as e:
                         print(f"Error appending to waste_items.csv: {str(e)}")
                         print(f"Error type: {type(e)}")
                         import traceback
                         print(f"Traceback: {traceback.format_exc()}")
-                        # If error reading, just write the new items
-                        new_waste_df.write_csv(waste_file)
                 else:
                     print("Creating new waste_items.csv")
                     # Create new file with waste items
-                    new_waste_df.write_csv(waste_file)
+                    try:
+                        with open(waste_file, 'w', newline='') as f:
+                            writer = csv.DictWriter(f, fieldnames=['item_id', 'name', 'reason', 'container_id', 'position', 'retrieval_steps'])
+                            writer.writeheader()
+                            writer.writerows(new_waste_items)
+                        print(f"Successfully created waste_items.csv with {len(new_waste_items)} items")
+                    except Exception as e:
+                        print(f"Error creating waste_items.csv: {str(e)}")
+                        print(f"Error type: {type(e)}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
                     
         except Exception as e:
             print(f"Error processing imported_items.csv for expiry: {str(e)}")
@@ -331,39 +490,10 @@ def calculate_volume(obj):
     height = abs(obj.end["height_cm"] - obj.start["height_cm"])
     return width * depth * height
 
-def load_imported_items(filename):
-    print(f"\nLoading imported items from {filename}")
-    imported_items = {}
-    if not os.path.exists(filename):
-        print(f"Warning: {filename} does not exist")
-        return imported_items
-    
-    with open(filename, newline="") as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            # Get item_id and ensure it's not empty
-            item_id = str(row.get("item_id", "")).strip()
-            if not item_id:
-                print(f"Skipping row with empty item_id: {row}")
-                continue
-                
-            # Get mass and convert to float
-            try:
-                mass = float(row.get("mass", 0))
-            except ValueError:
-                print(f"Invalid mass value for item {item_id}: {row.get('mass')}")
-                mass = 0
-                
-            print(f"Loaded item {item_id} with mass {mass}")
-            imported_items[item_id] = mass
-    
-    print(f"Loaded {len(imported_items)} imported items")
-    return imported_items
-
 def read_waste_data(waste_filename, imported_filename):
     print(f"\nReading waste data from {waste_filename}")
     objects = []
-    imported_items = load_imported_items(imported_filename)
+    imported_items = load_imported_items(imported_filename)  # Use the function from waste_algo.py
     print(f"Loaded imported items: {imported_items}")
     weights = {}
 
@@ -523,216 +653,67 @@ async def generate_return_plan(request: ReturnPlanRequest):
         print("\nGenerating return plan...")
         print(f"Request: {request}")
         
-        # Read waste items data
-        waste_df = pl.read_csv("waste_items.csv")
-        print(f"Read waste items data with {len(waste_df)} rows")
-        print(f"Waste items: {waste_df}")
+        # Extract request data
+        undocking_container_id = request.undockingContainerId
+        undocking_date = request.undockingDate
+        max_weight = float(request.maxWeight) if request.maxWeight else float('inf')
         
-        # Read imported items data for weights
-        imported_df = pl.read_csv("imported_items.csv")
-        print(f"Read imported items data with {len(imported_df)} rows")
+        # Load waste items and imported items data using the functions from waste_algo.py
+        waste_items = load_waste_items()  # Using default filename
+        imported_items = load_imported_items()  # Using default filename
         
-        # Read cargo arrangement data - prefer temp file if it exists
-        cargo_file = "cargo_arrangement.csv"
-        temp_cargo_file = "temp_cargo_arrangement.csv"
+        print(f"Loaded {len(waste_items)} waste items")
+        print(f"Loaded {len(imported_items)} imported items")
         
-        if os.path.exists(temp_cargo_file):
-            print(f"Using temp cargo file: {temp_cargo_file}")
-            cargo_df = pl.read_csv(temp_cargo_file)
-        else:
-            print(f"Using main cargo file: {cargo_file}")
-            cargo_df = pl.read_csv(cargo_file)
-            
-        print(f"Read cargo arrangement data with {len(cargo_df)} rows")
+        # Link waste items with their weights from imported items
+        linked_items = link_waste_with_imported_items(waste_items, imported_items)
+        print(f"Linked {len(linked_items)} items")
         
-        # Read containers data
-        containers_df = pl.read_csv("imported_containers.csv")
-        print(f"Read containers data with {len(containers_df)} rows")
+        # Filter items for the specified container
+        container_items = [item for item in linked_items if item["container_id"] == undocking_container_id]
+        print(f"Found {len(container_items)} items in container {undocking_container_id}")
         
-        # Filter waste items in the specified container
-        request_container_id = request.undockingContainerId.strip()
-        print(f"Filtering waste items for container: '{request_container_id}'")
-        waste_items = waste_df.filter(
-            pl.col("container_id").str.strip_chars().eq(request_container_id)
+        if not container_items:
+            print(f"No items found in container {undocking_container_id}")
+            return ReturnPlanResponse(
+                success=True,
+                returnPlan=[],
+                retrievalSteps=[],
+                returnManifest=ReturnManifest(
+                    totalVolume=0,
+                    totalWeight=0,
+                    undockingContainerId=undocking_container_id,
+                    undockingDate=undocking_date
+                )
+            )
+        
+        # Select optimal set of waste items using greedy approach
+        selected_items, total_weight = select_waste_items_greedy(container_items, max_weight)
+        print(f"Selected {len(selected_items)} items with total weight {total_weight} kg")
+        
+        # Generate return plan and retrieval steps using the renamed function
+        return_plan, retrieval_steps = generate_return_plan_steps(selected_items, undocking_container_id)
+        print(f"Generated {len(return_plan)} return plan steps")
+        print(f"Generated {len(retrieval_steps)} retrieval steps")
+        
+        # Create return manifest
+        return_manifest = create_return_manifest(
+            selected_items, 
+            undocking_container_id, 
+            undocking_date, 
+            total_weight
         )
-        
-        print(f"Found {len(waste_items)} waste items in container {request_container_id}")
-        print(f"Filtered waste items: {waste_items}")
-        
-        # Calculate total weight using Polars join
-        total_weight = 0
-        total_volume = 0
-        return_items = []
-        all_retrieval_steps = []
-        
-        if not waste_items.is_empty():
-            print("Processing waste items...")
-            # Join waste items with imported items to get weights
-            joined_df = waste_items.join(
-                imported_df,
-                left_on="item_id",
-                right_on="item_id",
-                how="left"
-            )
-            
-            print(f"Joined data: {joined_df}")
-            
-            # Sum up the mass_kg values
-            total_weight = joined_df["mass_kg"].sum()
-            print(f"Total weight: {total_weight} kg")
-            
-            # Calculate total volume from cargo arrangement data
-            for item in waste_items.to_dicts():
-                item_id = str(item.get('item_id', '')).strip()
-                print(f"Processing waste item ID: {item_id}")
-                if not item_id:
-                    print("Skipping item with empty ID")
-                    continue
-                
-                # Find the item in cargo arrangement to get accurate coordinates
-                item_cargo = cargo_df.filter(
-                    pl.col("item_id").cast(str).str.strip_chars().eq(item_id)
-                ).to_dicts()
-                
-                print(f"Cargo data for item {item_id}: {item_cargo}")
-                
-                if item_cargo:
-                    coords_str = item_cargo[0].get("coordinates", "")
-                    if coords_str:
-                        try:
-                            # Parse coordinates from format like "(0,0,0),(15.7,18.6,29.4)"
-                            coords = re.findall(r'[-+]?\d*\.\d+|[-+]?\d+', coords_str)
-                            if len(coords) >= 6:
-                                # Extract dimensions from coordinates
-                                width = abs(float(coords[3]) - float(coords[0]))
-                                depth = abs(float(coords[4]) - float(coords[1]))
-                                height = abs(float(coords[5]) - float(coords[2]))
-                                
-                                # Calculate item volume
-                                item_volume = width * depth * height
-                                total_volume += item_volume
-                                print(f"Item {item_id} volume: {item_volume} cubic cm")
-                        except Exception as e:
-                            print(f"Error calculating volume for item {item_id}: {str(e)}")
-                else:
-                    print(f"No cargo data found for item {item_id}")
-                    # Try to get dimensions from imported_items for items removed from cargo
-                    item_import = imported_df.filter(
-                        pl.col("item_id").cast(str).str.strip_chars().eq(item_id)
-                    ).to_dicts()
-                    
-                    if item_import:
-                        try:
-                            # Calculate volume from imported items dimensions
-                            width = float(item_import[0].get("width_cm", 0))
-                            depth = float(item_import[0].get("depth_cm", 0))
-                            height = float(item_import[0].get("height_cm", 0))
-                            
-                            # Calculate item volume
-                            item_volume = width * depth * height
-                            total_volume += item_volume
-                            print(f"Item {item_id} volume (from imported data): {item_volume} cubic cm")
-                        except Exception as e:
-                            print(f"Error calculating volume from imported data for item {item_id}: {str(e)}")
-            
-            print(f"Total volume: {total_volume} cubic cm")
-            
-            # Prepare data for ItemSearchSystem
-            items_data = []
-            for item in imported_df.to_dicts():
-                items_data.append({
-                    "item_id": str(item.get("item_id", "")),
-                    "name": str(item.get("name", "")),
-                    "width_cm": float(item.get("width_cm", 0)),
-                    "depth_cm": float(item.get("depth_cm", 0)),
-                    "height_cm": float(item.get("height_cm", 0)),
-                    "priority": int(item.get("priority", 1)),
-                    "usage_limit": int(item.get("usage_limit", 0))
-                })
-            
-            containers_data = []
-            for cont in containers_df.to_dicts():
-                containers_data.append({
-                    "container_id": str(cont.get("container_id", "")),
-                    "zone": str(cont.get("zone", "")),
-                    "width_cm": float(cont.get("width_cm", 0)),
-                    "depth_cm": float(cont.get("depth_cm", 0)),
-                    "height_cm": float(cont.get("height_cm", 0))
-                })
-            
-            cargo_data = []
-            for item in cargo_df.to_dicts():
-                cargo_data.append({
-                    "item_id": str(item.get("item_id", "")),
-                    "container_id": str(item.get("container_id", "")),
-                    "zone": str(item.get("zone", "")),
-                    "coordinates": str(item.get("coordinates", ""))
-                })
-            
-            # Create ItemSearchSystem instance
-            search_system = ItemSearchSystem(
-                items_data=items_data,
-                containers_data=containers_data,
-                cargo_data=cargo_data
-            )
-            
-            # Process each waste item
-            for item in waste_items.to_dicts():
-                item_id = str(item.get('item_id', '')).strip()
-                if not item_id:
-                    continue
-                
-                print(f"\nProcessing item {item_id}")
-                
-                # Search for the item using the optimized algorithm
-                result = search_system.search_by_id(item_id)
-                print(f"Search result: {result}")
-                
-                if result.get("success", False) and result.get("found", False):
-                    retrieval_steps = result.get("retrieval_steps", [])
-                    
-                    if retrieval_steps:
-                        # Add retrieval steps with container info
-                        for step in retrieval_steps:
-                            all_retrieval_steps.append({
-                                "action": step["action"],
-                                "item_id": str(step["item_id"]),
-                                "item_name": step.get("item_name", ""),
-                                "container_id": request_container_id,
-                                "zone": result.get("item", {}).get("zone", "")
-                            })
-                    else:
-                        # If no steps provided, create a simple one-step retrieval
-                        all_retrieval_steps.append({
-                            "action": "retrieve",
-                            "item_id": item_id,
-                            "item_name": result.get("item", {}).get("name", ""),
-                            "container_id": request_container_id,
-                            "zone": result.get("item", {}).get("zone", "")
-                        })
-                    
-                    # Add to return items
-                    return_items.append({
-                        "item_id": item_id,
-                        "name": item.get('name', ''),
-                        "reason": item.get('reason', ''),
-                        "container_id": request_container_id,
-                        "position": item.get('position', ''),
-                        "retrieval_steps": result.get("retrieval_steps", [])
-                    })
-        
-        print(f"Generated {len(all_retrieval_steps)} retrieval steps")
-        print(f"Return items: {return_items}")
+        print(f"Created return manifest with {len(return_manifest['returnItems'])} items")
         
         return ReturnPlanResponse(
             success=True,
-            returnPlan=return_items,
-            retrievalSteps=all_retrieval_steps,
+            returnPlan=return_plan,
+            retrievalSteps=retrieval_steps,
             returnManifest=ReturnManifest(
-                totalVolume=round(total_volume, 2),
-                totalWeight=round(total_weight, 2),
-                undockingContainerId=request.undockingContainerId,
-                undockingDate=request.undockingDate
+                totalVolume=return_manifest["totalVolume"],
+                totalWeight=return_manifest["totalWeight"],
+                undockingContainerId=undocking_container_id,
+                undockingDate=undocking_date
             )
         )
         
@@ -758,52 +739,48 @@ async def complete_undocking(request: CompleteUndockingRequest):
     items_file = "imported_items.csv"
     items_count = 0
     
+    # First, handle existing waste items
+    existing_waste_items = []
     if os.path.exists(waste_file):
         try:
             waste_items_df = pl.read_csv(waste_file)
             if not waste_items_df.is_empty():
-                filtered_df = waste_items_df.filter(pl.col("container_id") == request.undocking_container_id)
-                items_count = filtered_df.height
-                updated_df = waste_items_df.filter(pl.col("container_id") != request.undocking_container_id)
-                updated_df.write_csv(waste_file)
+                # Keep only items that are NOT in the undocking container
+                existing_waste_items = waste_items_df.filter(
+                    pl.col("container_id") != request.undocking_container_id
+                ).to_dicts()
+                # Count items being removed
+                items_count = waste_items_df.filter(
+                    pl.col("container_id") == request.undocking_container_id
+                ).height
+                
+                # Write back the filtered waste items
+                if existing_waste_items:
+                    waste_df = pl.DataFrame(existing_waste_items)
+                    waste_df.write_csv(waste_file)
+                else:
+                    # If no items left, delete the file
+                    os.remove(waste_file)
         except Exception as e:
             print(f"Error processing waste items: {str(e)}")
     
+    # Then handle items that have reached their usage limit
     if os.path.exists(items_file):
         try:
             items_df = pl.read_csv(items_file)
             if "usage_count" in items_df.columns and "usage_limit" in items_df.columns:
+                # Check for items that have reached their usage limit OR have a usage limit of 0
                 expired_items = items_df.filter(
-                    (pl.col("usage_count") >= pl.col("usage_limit")) & 
+                    ((pl.col("usage_count") >= pl.col("usage_limit")) | 
+                     (pl.col("usage_limit") == 0)) & 
                     (pl.col("container_id") == request.undocking_container_id)
                 )
                 
                 if not expired_items.is_empty():
-                    new_waste_items = []
-                    
-                    for item in expired_items.to_dicts():
-                        position_str = f"(0,0,0),(0,0,0)"
-                        new_waste_item = {
-                            "item_id": item["item_id"],
-                            "name": item["name"] if "name" in item else f"Item {item['item_id']}",
-                            "reason": "Usage limit reached",
-                            "container_id": item["container_id"],
-                            "position": position_str
-                        }
-                        new_waste_items.append(new_waste_item)
-                    
-                    new_waste_df = pl.DataFrame(new_waste_items)
-                    
-                    if os.path.exists(waste_file) and not pl.read_csv(waste_file).is_empty():
-                        combined_df = pl.concat([pl.read_csv(waste_file), new_waste_df])
-                        combined_df.write_csv(waste_file)
-                    else:
-                        new_waste_df.write_csv(waste_file)
-                    
-                    items_count += new_waste_df.height
-                    
+                    # Remove items that have reached their usage limit OR have a usage limit of 0
                     items_df = items_df.filter(
-                        ~((pl.col("usage_count") >= pl.col("usage_limit")) & 
+                        ~(((pl.col("usage_count") >= pl.col("usage_limit")) | 
+                           (pl.col("usage_limit") == 0)) & 
                           (pl.col("container_id") == request.undocking_container_id))
                     )
                     items_df.write_csv(items_file)
