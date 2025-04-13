@@ -278,7 +278,7 @@ def log_retrieval(item_id, user_id, timestamp):
     if not os.path.exists(log_file):
         with open(log_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['item_id', 'user_id', 'timestamp'])
+            writer.writerow(['item_id', 'usCer_id', 'timestamp'])
     
     with open(log_file, 'a', newline='') as f:
         writer = csv.writer(f)

@@ -1,4 +1,4 @@
 timestamp,user_id,action_type,item_id,details
-2025-04-04T14:45:58.605750+00:00,user1,placement,1,"{""container"": ""A"", ""zone"": ""Crew Quarters""}"
-2025-04-04T14:45:58.605750+00:00,user2,retrieval,2,"{""container"": ""B"", ""zone"": ""Storage""}"
-2025-04-04T14:45:58.615369+00:00,user3,rearrangement,3,"{""from_container"": ""A"", ""to_container"": ""B""}"
+2025-04-06T13:28:14.023813+00:00,"",Import Containers,0,"{""from_container"": """", ""to_container"": """", ""reason"": ""Imported 56 containers successfully.""}"
+2025-04-06T13:28:20.567731+00:00,"",Import Items,0,"{""from_container"": """", ""to_container"": """", ""reason"": ""Imported 2000 items successfully.""}"
+2025-04-06T13:28:25.275395+00:00,"",Export Arrangement,0,"{""from_container"": """", ""to_container"": """", ""reason"": ""Exported 2000 placements successfully""}"

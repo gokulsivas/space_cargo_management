@@ -375,10 +375,12 @@ class ReturnPlanRequest(BaseModel):
     undocking_container_id: str
     undocking_date: str
     max_weight: float
+    user_id: str
 
 class CompleteUndockingRequest(BaseModel):
     undocking_container_id: str
     timestamp: str
+    user_id: str
 
 class WasteItem(BaseModel):
     item_id: int

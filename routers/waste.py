@@ -18,11 +18,15 @@ from algos.waste_algo import (
     generate_return_plan as generate_return_plan_steps,
     create_return_manifest
 )
+from algos.user_tracking import UserTracker
 
 router = APIRouter(
     prefix="/api/waste",
     tags=["waste"],
 )
+
+# Initialize user tracker
+user_tracker = UserTracker()
 
 async def search_retrieve(item_id: int, zone: str) -> dict:
     """Call the search endpoint to get retrieval steps for an item."""
@@ -658,6 +662,15 @@ async def generate_return_plan(request: ReturnPlanRequest):
         undocking_container_id = request.undocking_container_id
         undocking_date = request.undocking_date
         max_weight = float(request.max_weight) if request.max_weight else float('inf')
+        user_id = request.user_id  # Get user_id from request
+        
+        # Log the action
+        user_tracker.log_action(
+            user_id=user_id,
+            action_type="generate_return_plan",
+            container_id=undocking_container_id,
+            details=f"Requested return plan for container {undocking_container_id} with max weight {max_weight}"
+        )
         
         # Load waste items and imported items data using the functions from waste_algo.py
         waste_items = load_waste_items()  # Using default filename
@@ -737,6 +750,14 @@ async def generate_return_plan(request: ReturnPlanRequest):
                 reason=item["reason"]
             ))
         
+        # Log successful return plan generation
+        user_tracker.log_action(
+            user_id=user_id,
+            action_type="return_plan_generated",
+            container_id=undocking_container_id,
+            details=f"Generated return plan with {len(return_items)} items"
+        )
+        
         return ReturnPlanResponse(
             success=True,
             return_plan=return_plan_steps,
@@ -755,6 +776,16 @@ async def generate_return_plan(request: ReturnPlanRequest):
         print(f"Error type: {type(e)}")
         import traceback
         print(f"Traceback: {traceback.format_exc()}")
+        
+        # Log the error
+        if request:
+            user_tracker.log_action(
+                user_id=request.user_id,
+                action_type="return_plan_error",
+                container_id=request.undocking_container_id,
+                details=f"Error generating return plan: {str(e)}"
+            )
+        
         return ReturnPlanResponse(
             success=False,
             error=str(e),
@@ -771,57 +802,99 @@ async def generate_return_plan(request: ReturnPlanRequest):
 
 @router.post("/complete-undocking")
 async def complete_undocking(request: CompleteUndockingRequest):
-    waste_file = "waste_items.csv"
-    items_file = "imported_items.csv"
-    items_count = 0
-    
-    # First, handle existing waste items
-    existing_waste_items = []
-    if os.path.exists(waste_file):
-        try:
-            waste_items_df = pl.read_csv(waste_file)
-            if not waste_items_df.is_empty():
-                # Keep only items that are NOT in the undocking container
-                existing_waste_items = waste_items_df.filter(
-                    pl.col("container_id") != request.undocking_container_id
-                ).to_dicts()
-                # Count items being removed
-                items_count = waste_items_df.filter(
-                    pl.col("container_id") == request.undocking_container_id
-                ).height
-                
-                # Write back the filtered waste items
-                if existing_waste_items:
-                    waste_df = pl.DataFrame(existing_waste_items)
-                    waste_df.write_csv(waste_file)
-                else:
-                    # If no items left, delete the file
-                    os.remove(waste_file)
-        except Exception as e:
-            print(f"Error processing waste items: {str(e)}")
-    
-    # Then handle items that have reached their usage limit
-    if os.path.exists(items_file):
-        try:
-            items_df = pl.read_csv(items_file)
-            if "usage_count" in items_df.columns and "usage_limit" in items_df.columns:
-                # Check for items that have reached their usage limit OR have a usage limit of 0
-                expired_items = items_df.filter(
-                    ((pl.col("usage_count") >= pl.col("usage_limit")) | 
-                     (pl.col("usage_limit") == 0)) & 
-                    (pl.col("container_id") == request.undocking_container_id)
-                )
-                
-                if not expired_items.is_empty():
-                    # Remove items that have reached their usage limit OR have a usage limit of 0
-                    items_df = items_df.filter(
-                        ~(((pl.col("usage_count") >= pl.col("usage_limit")) | 
-                           (pl.col("usage_limit") == 0)) & 
-                          (pl.col("container_id") == request.undocking_container_id))
-                    )
-                    items_df.write_csv(items_file)
+    """Complete the undocking process for a container."""
+    try:
+        print("\nCompleting undocking...")
+        print(f"Request: {request}")
         
-        except Exception as e:
-            print(f"Error processing items at usage limit: {str(e)}")
-    
-    return {"success": True, "items_removed": items_count}
+        # Extract request data
+        undocking_container_id = request.undocking_container_id
+        user_id = request.user_id  # Get user_id from request
+        
+        # Log the action
+        user_tracker.log_action(
+            user_id=user_id,
+            action_type="complete_undocking",
+            container_id=undocking_container_id,
+            details=f"Starting undocking process for container {undocking_container_id}"
+        )
+        
+        waste_file = "waste_items.csv"
+        items_file = "imported_items.csv"
+        items_count = 0
+        
+        # First, handle existing waste items
+        existing_waste_items = []
+        if os.path.exists(waste_file):
+            try:
+                waste_items_df = pl.read_csv(waste_file)
+                if not waste_items_df.is_empty():
+                    # Keep only items that are NOT in the undocking container
+                    existing_waste_items = waste_items_df.filter(
+                        pl.col("container_id") != request.undocking_container_id
+                    ).to_dicts()
+                    # Count items being removed
+                    items_count = waste_items_df.filter(
+                        pl.col("container_id") == request.undocking_container_id
+                    ).height
+                    
+                    # Write back the filtered waste items
+                    if existing_waste_items:
+                        waste_df = pl.DataFrame(existing_waste_items)
+                        waste_df.write_csv(waste_file)
+                    else:
+                        # If no items left, delete the file
+                        os.remove(waste_file)
+            except Exception as e:
+                print(f"Error processing waste items: {str(e)}")
+        
+        # Then handle items that have reached their usage limit
+        if os.path.exists(items_file):
+            try:
+                items_df = pl.read_csv(items_file)
+                if "usage_count" in items_df.columns and "usage_limit" in items_df.columns:
+                    # Check for items that have reached their usage limit OR have a usage limit of 0
+                    expired_items = items_df.filter(
+                        ((pl.col("usage_count") >= pl.col("usage_limit")) | 
+                         (pl.col("usage_limit") == 0)) & 
+                        (pl.col("container_id") == request.undocking_container_id)
+                    )
+                    
+                    if not expired_items.is_empty():
+                        # Remove items that have reached their usage limit OR have a usage limit of 0
+                        items_df = items_df.filter(
+                            ~(((pl.col("usage_count") >= pl.col("usage_limit")) | 
+                               (pl.col("usage_limit") == 0)) & 
+                              (pl.col("container_id") == request.undocking_container_id))
+                        )
+                        items_df.write_csv(items_file)
+            
+            except Exception as e:
+                print(f"Error processing items at usage limit: {str(e)}")
+        
+        # Log successful undocking
+        user_tracker.log_action(
+            user_id=user_id,
+            action_type="undocking_completed",
+            container_id=undocking_container_id,
+            details=f"Completed undocking with {items_count} items removed"
+        )
+        
+        return {"success": True, "items_removed": items_count}
+        
+    except Exception as e:
+        print(f"Error completing undocking: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        
+        # Log the error
+        if request:
+            user_tracker.log_action(
+                user_id=request.user_id,
+                action_type="undocking_error",
+                container_id=request.undocking_container_id,
+                details=f"Error completing undocking: {str(e)}"
+            )
+        
+        return {"success": False, "error": str(e)}

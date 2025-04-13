@@ -121,17 +121,13 @@ async def get_logs(
                 pl.col("item_id").cast(pl.Int64, strict=False)
             )
             
-            # Apply filters
+            # Apply filters (excluding user_id filter)
             filter_conditions = (pl.col("timestamp") >= start_date) & (pl.col("timestamp") <= end_date)
             
             if item_id is not None:
                 print(f"Filtering by item_id: {item_id}")
                 # Convert item_id to Int64 for comparison
                 filter_conditions = filter_conditions & (pl.col("item_id") == pl.lit(item_id, dtype=pl.Int64))
-            
-            if user_id is not None:
-                print(f"Filtering by user_id: {user_id}")
-                filter_conditions = filter_conditions & (pl.col("user_id") == user_id)
             
             if action_type is not None:
                 print(f"Filtering by action_type: {action_type}")
@@ -151,14 +147,23 @@ async def get_logs(
                 except:
                     log["details"] = {}
             
-            return {"logs": logs_list}
+            return {
+                "logs": logs_list,
+                "user_id": user_id if user_id else None
+            }
         
         print(f"Log file {LOG_FILE} not found")
-        return {"logs": []}
+        return {
+            "logs": [],
+            "user_id": user_id if user_id else None
+        }
         
     except Exception as e:
         print(f"Error processing logs: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return {"logs": []}
+        return {
+            "logs": [],
+            "user_id": user_id if user_id else None
+        }
 

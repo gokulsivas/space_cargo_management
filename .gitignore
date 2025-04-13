@@ -1,6 +1,0 @@
-__pycache__/
-routers/__pycache__/
-*.py[cod]
-*.so
-*.pyd
-*.dll
