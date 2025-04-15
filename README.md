@@ -34,20 +34,21 @@ The objective is to maximize space utilization while preserving item accessibili
 1. Clone the repository and navigate to the project directory:
 
    ```bash
-   git clone https://github.com/Tusker13-04/Interstellar.git
-   cd Interstellar
+   git clone https://github.com/gokulsivas/space_cargo_management.git
+   cd space_cargo_management
+
    ```
 
 2. **Docker Setup**:
    - Build the Docker image:
 
      ```bash
-     docker build -t cargo-management-system .
+     docker build -t space-cargo-management .
      ```
 
    - Run the Docker container:
 
      ```bash
-     docker run --network=host cargo-management-system
+     docker run --network=host space-cargo-management
      ```
 
