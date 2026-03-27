@@ -13,8 +13,8 @@ A 3D cargo placement and retrieval optimization system for space station invento
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
-<!-- ![Interstellar Banner](assets/banner.png)
 
+![Interstellar Banner](assets/banner.png)
 ---
 
 ## Overview
@@ -41,22 +41,21 @@ The objective is to maximize space utilization while preserving item accessibili
 ## System Pages
 
 ### Home Dashboard
-<img width="3813" height="1885" alt="image" src="https://github.com/user-attachments/assets/4beb6102-26b6-45cb-9fb4-88a89010daf8" />
-<!-- ![Home Dashboard](assets/dashboard.png) -->
+![Home Dashboard](assets/dashboard.png)
 
 The main control panel displaying container state, active items, utilization metrics, and quick-access actions.
 
 ---
 
 ### 3D Visualization
-<img width="3757" height="2051" alt="image" src="https://github.com/user-attachments/assets/b2b028d2-9bf8-41a4-b5f4-d20804c1d1dd" />
+![3D Visualization](assets/3d_viz.png)
 
 An interactive 3D view of the cargo container showing item placements, zone boundaries, and spatial occupancy in real time.
 
 ---
 
 ### Item Retrieval Page
-<img width="3721" height="2064" alt="image" src="https://github.com/user-attachments/assets/472adf7a-a1b7-4cfd-8534-88a7a473da85" />
+![Retrieval Page](assets/retrieval.png)
 
 
 Provides step-by-step retrieval instructions for a requested item, including obstructions to clear and the optimal path computed by the A* algorithm.
@@ -64,31 +63,28 @@ Provides step-by-step retrieval instructions for a requested item, including obs
 ---
 
 ### Time Simulation Page
-<img width="3524" height="1654" alt="image" src="https://github.com/user-attachments/assets/785bba1d-e478-4209-b566-759a77bf73a7" />
+![Time Simulation](assets/simulation.png)
 
 
 Simulates the passage of time within the container - tracking item expiry, usage depletion, and triggering waste identification and return manifest generation.
 
 ---
 ### Waste Management
-<img width="3696" height="2109" alt="image" src="https://github.com/user-attachments/assets/f7604309-a332-4df3-bd78-acaba08cec6e" />
-<!-- ![Waste Management](assets/waste.png) -->
+![Waste Management](assets/waste.png)
 
 Identifies expired or depleted items by container and generates a structured Return Manifest - complete with item list, step-by-step return instructions, retrieval steps, and a one-click Complete Undocking action.
 
 ---
 
 ### Activity Logs
-<img width="3561" height="1416" alt="image" src="https://github.com/user-attachments/assets/6c216292-be46-4b12-8841-5013b0170c89" />
-<!-- ![Activity Logs](assets/logs.png) -->
+![Activity Logs](assets/logs.png)
 
 A searchable, filterable audit trail of all system actions - query by date range, item ID, user ID, or action type to track placements, retrievals, imports, and container events over time.
 
 ---
 
 ### Import / Export
-<img width="3255" height="1399" alt="image" src="https://github.com/user-attachments/assets/7217f56e-aa99-4ee6-93df-47c5afda86e0" />
-<!-- ![Import / Export](assets/impexp.png) -->
+![Import / Export](assets/impexp.png)
 
 Bulk-load items and containers via CSV upload and export the current optimized arrangement - the import result panel confirms total items ingested (tested with 2000+ items) for quick dataset validation.
 
