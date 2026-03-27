@@ -13,18 +13,13 @@ A 3D cargo placement and retrieval optimization system for space station invento
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
-<img width="2653" height="1566" alt="image" src="https://github.com/user-attachments/assets/7f102e0a-1fc0-42f5-a277-6be18c980401" />
+<!-- ![Interstellar Banner](assets/banner.png)
 
 ---
 
 ## Overview
 
-Interstellar is a cargo management system built to solve the problem of optimal 3D space utilization in constrained environments such as space station modules, warehouses, and cargo containers. It places, retrieves, searches, and disposes of items intelligently - using advanced algorithms that account for item priority, accessibility, group dependencies, and physical feasibility.
-
-The project was developed as a team submission for the **National Space Hackathon 2025**, organized jointly by **IIT Delhi** and **ISRO**, where team Interstellar secured a spot among the **top 10 finalist teams** nationally.
-
-<!-- PLACEHOLDER: Add your certificate image here -->
-<!-- ![Certificate](assets/certificate.png) -->
+Interstellar is a cargo management system built to solve the problem of optimal 3D space utilization in constrained environments such as space station modules, warehouses, and cargo containers. It places, retrieves, searches, and disposes of items intelligently using advanced algorithms that account for item priority, accessibility, group dependencies, and physical feasibility.
 
 ---
 
@@ -47,7 +42,7 @@ The objective is to maximize space utilization while preserving item accessibili
 
 ### Home Dashboard
 <img width="3813" height="1885" alt="image" src="https://github.com/user-attachments/assets/4beb6102-26b6-45cb-9fb4-88a89010daf8" />
-
+<!-- ![Home Dashboard](assets/dashboard.png) -->
 
 The main control panel displaying container state, active items, utilization metrics, and quick-access actions.
 
@@ -75,12 +70,27 @@ Provides step-by-step retrieval instructions for a requested item, including obs
 Simulates the passage of time within the container - tracking item expiry, usage depletion, and triggering waste identification and return manifest generation.
 
 ---
-
+### Waste Management
 <img width="3696" height="2109" alt="image" src="https://github.com/user-attachments/assets/f7604309-a332-4df3-bd78-acaba08cec6e" />
+<!-- ![Waste Management](assets/waste.png) -->
+
+Identifies expired or depleted items by container and generates a structured Return Manifest - complete with item list, step-by-step return instructions, retrieval steps, and a one-click Complete Undocking action.
+
+---
+
+### Activity Logs
 <img width="3561" height="1416" alt="image" src="https://github.com/user-attachments/assets/6c216292-be46-4b12-8841-5013b0170c89" />
+<!-- ![Activity Logs](assets/logs.png) -->
+
+A searchable, filterable audit trail of all system actions - query by date range, item ID, user ID, or action type to track placements, retrievals, imports, and container events over time.
+
+---
+
+### Import / Export
 <img width="3255" height="1399" alt="image" src="https://github.com/user-attachments/assets/7217f56e-aa99-4ee6-93df-47c5afda86e0" />
+<!-- ![Import / Export](assets/impexp.png) -->
 
-
+Bulk-load items and containers via CSV upload and export the current optimized arrangement - the import result panel confirms total items ingested (tested with 2000+ items) for quick dataset validation.
 
 ---
 
@@ -134,9 +144,9 @@ Identifies expired or used-up items using a greedy selection strategy. Generates
 
 ```
 space_cargo_management/
-├── placement_algo.py         # AdvancedCargoPlacement — Octree + SparseMatrix
-├── retrieve_algo.py          # PriorityAStarRetrieval — A* pathfinding
-├── search_algo.py            # ItemSearchSystem — Dependency graph search
+├── placement_algo.py         # AdvancedCargoPlacement - Octree + SparseMatrix
+├── retrieve_algo.py          # PriorityAStarRetrieval - A* pathfinding
+├── search_algo.py            # ItemSearchSystem - Dependency graph search
 ├── waste_algo.py             # Greedy waste selection + return manifests
 ├── app/                      # FastAPI application and route handlers
 ├── config/                   # Configuration files
@@ -216,8 +226,8 @@ This project was built for the **National Space Hackathon 2025**, jointly organi
 | Name       | GitHub                                          |
 |------------|-------------------------------------------------|
 | Gokul S    | [@gokulsivas](https://github.com/gokulsivas)    |
-| Ajay Anand | <!-- PLACEHOLDER: Add GitHub link -->           |
-| Raghav K   | [@Tusker13-04](https://github.com/Tusker13-04) |
+| Ajay Anand | [@AJrelapse](https://github.com/AJrelapse)      |
+| Raghav K   | [@Tusker13-04](https://github.com/Tusker13-04)  |
 
 ---
 
